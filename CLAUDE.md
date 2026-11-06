@@ -15,8 +15,22 @@ no runtime dependencies.
 
 ## Code conventions
 
-- Immutable values are `record`s (`Match`, `MatchId`).
+- Immutable values are `record`s (`Match`, `MatchId`) that validate their own invariants in a compact constructor
+  (no `null`s, no negative scores), so an invalid instance cannot exist.
 - Only the API is public; implementation classes are package-private.
+- Packages: `scoreboard` (interface, implementation, helpers), `scoreboard.model` (records),
+  `scoreboard.exception` (domain exceptions) — see D9.
+- Separation of responsibilities:
+  - `LiveScoreboard` — orchestration and concurrency (D4): everything that does not depend on the state
+    (normalization, stateless validation, ids, new objects) runs before the lock; inside `synchronized (writeLock)`
+    only state-dependent checks and replacing the state; reads only read the `volatile` state
+  - `MatchFactory` — builds a valid new `Match` from raw input (input checks, normalization, id); no state
+  - `ScoreboardState` — immutable state; copies its collections itself; changes return a new instance;
+    never pass mutable collections around
+  - `MatchValidator` — business rules; `void` methods that throw; input checks (`null`, blank) run on the raw input
+    before normalization, so messages can name the parameter
+  - `TeamNames` — normalization and comparison of team names
+- Method names say what they do: a method that returns a transformed value is not called `require…` or `validate…`.
 - Errors follow D6: `NullPointerException` for `null`, `IllegalArgumentException` for invalid values,
   `MatchNotFoundException` and `TeamAlreadyPlayingException` for state violations.
 - No comments or Javadoc: the code explains itself through names, and the tests describe the behaviour.
@@ -24,10 +38,16 @@ no runtime dependencies.
 
 ## Testing
 
-- Test-first: write the test cases, get them reviewed, then implement.
+- Test-first: write the tests for a step and run them to see them fail, then implement.
+  The developer reviews tests and code together before committing.
 - JUnit 6 + AssertJ. Test names describe the behaviour, e.g. `newMatchStartsWithZeroScore`.
+- Tests follow given / when / then, marked with `// given`, `// when`, `// then` (`// when & then` when the action
+  is the assertion, e.g. `assertThatThrownBy`) — the only comments allowed.
+- Tests are grouped with `@Nested` classes per operation.
 - Until ordering is implemented (plan step 5), do not assert the order of the summary.
 - Every commit keeps the build green: `./mvnw verify` (Windows: `mvnw.cmd verify`). Requires JDK 25.
+  The compiler runs with `-Xlint:all -Werror`; check warnings with a **clean** build (`./mvnw clean verify`),
+  since incremental builds do not recompile unchanged classes.
 
 ## Boundaries
 

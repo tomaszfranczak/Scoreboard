@@ -4,11 +4,11 @@ This document captures how the (intentionally open) requirements were interprete
 the open questions, the options considered, and the decision taken for each.
 It is the primary design artifact that guided the implementation.
 
-Status legend: **Accepted** — decided and reviewed; **Proposed** — default chosen, open to review;
-**Open** — to be decided in a later phase.
+Status legend: **Accepted** — decided and reviewed; **Open** — to be decided in a later phase.
 
-Each decision has an **Origin** note recording how it was reached. The decisions were worked out
-in a discussion with an AI assistant (Claude Code); the full dialogue is summarized in [AI.md](../AI.md).
+The decisions were worked out in a discussion with an AI assistant (Claude Code); the dialogue is summarized
+in [AI.md](../AI.md). Decisions that changed or were shaped during that discussion have an **Origin** note;
+the others were proposed by the AI and accepted after review.
 
 ## 1. Requirements as stated
 
@@ -21,9 +21,9 @@ in a discussion with an AI assistant (Claude Code); the full dialogue is summari
 
 Constraints: a simple Java library in a Maven project, in-memory, supporting multiple simultaneous matches.
 
-## 2. What the exercise is really probing
+## 2. Open questions in the requirements
 
-| Area | Hidden question |
+| Area | Question |
 |---|---|
 | Ordering | How is "most recently started" determined deterministically? |
 | Score update | Absolute score or increment? What about corrections and unreliable feeds? |
@@ -101,6 +101,25 @@ very few writes (2–3 goals per match over 90 minutes). The spec does not state
 | **Copy-on-write snapshot** ✅ | **Reads ≫ writes, small data set** | Every write copies and re-sorts; poor fit for frequent writes or large n |
 | `ConcurrentHashMap` alone | Independent per-key operations | Cannot enforce cross-key invariants (a team in at most one live match) without races; summary iteration is only weakly consistent |
 
+Implementation notes:
+- The writer lock is a private `synchronized` monitor. Since JDK 24 (JEP 491) `synchronized` no longer pins virtual
+  threads, so `ReentrantLock` would add nothing here.
+- `ConcurrentHashMap.putIfAbsent` does not help: the key is a fresh `MatchId`, so it never conflicts, while the
+  invariant at risk ("a team plays in one match at a time") spans several entries. A lock-free variant would need a
+  second map of team reservations with rollback, and still would not give readers a consistent snapshot.
+- The validator receives the immutable state, never a live view of a mutable collection.
+- The critical section holds only what depends on the current state: the "team already playing" check and
+  building the new state. Name normalization, stateless validation, id generation (`UUID.randomUUID()` uses
+  `SecureRandom`) and creating the `Match` happen before the lock is taken.
+- A lock-free alternative fits the immutable state naturally: `AtomicReference.updateAndGet` with the check and
+  the new state computed inside, retried on conflict. It was not chosen: under contention the work is repeated,
+  the update function must stay side-effect free, and with a minimal critical section and rare writes the lock
+  costs practically nothing while being easier to reason about.
+- The "team already playing" check scans the matches in progress (O(n)). A separate index of playing teams would make
+  it O(1), but it was rejected: a World Cup has at most a handful of simultaneous matches, the index would be a second
+  source of truth to keep consistent on every start and finish, and it would be copied on every write as well.
+  Worth revisiting only if the scoreboard had to hold thousands of matches.
+
 `ReentrantReadWriteLock` was considered specifically because of the read-heavy assumption and rejected:
 our read section (copy + sort of a few dozen elements) is too short for it to pay off, and readers would still contend.
 
@@ -119,10 +138,17 @@ Confirming them would require a JMH benchmark under a realistic read/write ratio
 
 - Team names are `String`s in the API (no `Team` value object — not needed for this scope).
 - `null` → `NullPointerException`; blank → `IllegalArgumentException`.
-- Names are trimmed; comparison for uniqueness is **case-insensitive** (`"Spain"` and `" spain "` are the same team).
-  The trimmed name as first provided is kept for display.
+- Leading and trailing whitespace is stripped (`String.strip`, Unicode-aware); comparison for uniqueness is
+  **case-insensitive** (`"Spain"` and `" spain "` are the same team). The stripped name as provided is kept for display.
 - A match cannot be started with the same team on both sides.
 - A team cannot take part in more than one match in progress.
+- A rejected start leaves the scoreboard unchanged.
+
+Edge cases considered and deliberately left out:
+- Internal whitespace is not collapsed: `"Costa  Rica"` and `"Costa Rica"` are different teams.
+- Case-insensitive comparison is character by character (`String.equalsIgnoreCase`), without full Unicode
+  case folding — e.g. `"ß"` and `"SS"` are not equal. Team names are expected to come from a controlled source.
+- There is no maximum length for a team name.
 
 ### D6. Error reporting — **Accepted**
 
@@ -137,6 +163,9 @@ Follows JDK conventions for programming errors, with domain-specific unchecked e
 
 Domain exceptions extend `RuntimeException`: callers cannot meaningfully recover from them at every call site,
 and checked exceptions would clutter the API.
+
+The public records (`Match`, `MatchId`) enforce the same rules in their compact constructors (`null` → NPE,
+negative score → IAE), so an invalid instance cannot be built even outside the scoreboard.
 
 ### D7. Lifecycle — **Accepted**
 
@@ -171,8 +200,16 @@ Open questions (to be decided when implementing the feature):
 
 ### D9. Public API surface and encapsulation — **Accepted**
 
-- `getSummary()` returns an immutable `List<Match>`; `Match` is an immutable record (id, teams, scores, `totalScore()`).
+- `getSummary()` returns an immutable `List<Match>`; `Match` is an immutable record (id, teams, scores;
+  `totalScore()` is added with the ordering step).
 - Implementation classes are package-private; clients obtain an instance through a factory and depend only on the `Scoreboard` interface.
+- Packages: `scoreboard` (the interface and its package-private implementation and helpers),
+  `scoreboard.model` (`Match`, `MatchId`), `scoreboard.exception` (domain exceptions).
+  The implementation stays next to the interface so that it can remain package-private. Moving it to its own package
+  would make it public; hiding it again would need `module-info.java`, which only helps module-path clients —
+  too much machinery for a library of this size.
+- Match ids are generated inside the implementation. A client can still construct a `MatchId` (a record's canonical
+  constructor is always public), but such an id never matches a started match and is rejected with `MatchNotFoundException`.
 - No frameworks or runtime dependencies — plain Java 25.
 
 ## 4. Assumptions (summary for README)
@@ -180,6 +217,6 @@ Open questions (to be decided when implementing the feature):
 1. The workload is read-heavy (D4).
 2. Score updates come from a feed with at-least-once delivery — duplicates are expected (D2).
 3. Scores may decrease to express corrections (D2).
-4. Team names are case-insensitive and whitespace-trimmed (D5).
+4. Team names are case-insensitive, with leading and trailing whitespace stripped (D5).
 5. Finished matches are not retained (D7).
 6. Everything is in memory; no persistence (spec).
