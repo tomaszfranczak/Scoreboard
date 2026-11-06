@@ -19,6 +19,10 @@ public record Match(MatchId id, String homeTeam, String awayTeam, int homeScore,
         this(id, homeTeam, awayTeam, 0, 0);
     }
 
+    public long totalScore() {
+        return (long) homeScore + awayScore;
+    }
+
     public Match withScore(int homeScore, int awayScore) {
         return new Match(id, homeTeam, awayTeam, homeScore, awayScore);
     }

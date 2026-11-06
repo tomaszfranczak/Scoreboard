@@ -82,6 +82,13 @@ Start order is tracked with a **monotonic sequence counter**, not a wall-clock t
 - A counter is deterministic, cheap, and needs no injectable `Clock`.
 - The sequence is an internal detail and is not exposed in the public API.
 
+Implementation: the counter lives in `ScoreboardState`, and each match is stored together with its sequence as a
+package-private `StartedMatch`, not in the public `Match` record. The ordering rule is the `SummaryOrder` comparator.
+A sequence is assigned only when a match is added for the first time, so score updates keep the original start order.
+The summary is sorted once per write — total score descending, then sequence descending — so reads stay O(1) (D4).
+`Match.totalScore()` returns a `long`: the sum of two `int` scores cannot overflow, and no artificial upper bound
+on a score is needed.
+
 ### D4. Concurrency strategy — **Accepted**
 
 **Assumption:** the workload is read-heavy — many readers (displays, API clients polling the summary),
@@ -124,6 +131,20 @@ Implementation notes:
   it O(1), but it was rejected: a World Cup has at most a handful of simultaneous matches, the index would be a second
   source of truth to keep consistent on every start and finish, and it would be copied on every write as well.
   Worth revisiting only if the scoreboard had to hold thousands of matches.
+
+**Keeping the summary sorted.** Every write copies the map (O(n)), copies it into an immutable map (O(n)), sorts
+(O(n log n)) and builds the list (O(n)); every read returns the ready list (O(1)).
+
+| Structure | Write | Read | Trade-off |
+|---|---|---|---|
+| **Immutable map + list sorted on write** ✅ | O(n log n) | O(1) | Simplest; fits rare writes, frequent reads and small n |
+| Sort on every read | O(n) | O(n log n) | Cheaper writes, but every one of the frequent reads pays for the sort |
+| Lazily sorted on first read after a write | O(n) | O(1), first read O(n log n) | Saves sorting only for bursts of writes without reads in between; needs thread-safe lazy initialisation inside an immutable object (`StableValue` is only a preview in JDK 25) |
+| Ordered tree (`TreeSet` / `TreeMap` keyed by the summary order) | O(log n) insert / remove | O(n) to copy out a snapshot | Keeps the order incrementally, but: a mutable tree cannot be shared with lock-free readers, so copy-on-write would copy it anyway (O(n)); the sort key changes on every score update, so an update is remove + re-insert; the comparator must break all ties (start sequence) or the tree drops "equal" matches |
+| Persistent (immutable, structurally shared) tree | O(log n) | O(1) via a shared version | Gives both cheap writes and lock-free reads, but the JDK has no persistent collections — it would need a dependency or a hand-written structure; over-engineering at this scale |
+
+A tree becomes worth it only when n is large **and** writes are frequent — the same point at which the copy-on-write
+strategy as a whole should be replaced (see above). At this scale the sorted list is the simplest correct choice.
 
 `ReentrantReadWriteLock` was considered specifically because of the read-heavy assumption and rejected:
 our read section (copy + sort of a few dozen elements) is too short for it to pay off, and readers would still contend.
@@ -211,12 +232,15 @@ Open questions (to be decided when implementing the feature):
 
 - `getSummary()` returns an immutable `List<Match>`; `Match` is an immutable record (id, teams, scores;
   `totalScore()` is added with the ordering step).
-- Implementation classes are package-private; clients obtain an instance through a factory and depend only on the `Scoreboard` interface.
-- Packages: `scoreboard` (the interface and its package-private implementation and helpers),
-  `scoreboard.model` (`Match`, `MatchId`), `scoreboard.exception` (domain exceptions).
-  The implementation stays next to the interface so that it can remain package-private. Moving it to its own package
-  would make it public; hiding it again would need `module-info.java`, which only helps module-path clients —
-  too much machinery for a library of this size.
+- Clients obtain an instance through `Scoreboard.create()` and depend only on the `Scoreboard` interface.
+- Packages: `scoreboard` (the `Scoreboard` interface only), `scoreboard.model` (`Match`, `MatchId`),
+  `scoreboard.exception` (domain exceptions), `scoreboard.internal` (the whole implementation).
+- Inside `internal` every class is package-private except `LiveScoreboard`, which `Scoreboard.create()` must reach.
+  The implementation is not split into further sub-packages: each split would force more classes to become public.
+- `module-info.java` exports only `scoreboard`, `model` and `exception`, so `internal` is inaccessible to clients on
+  the module path; on the class path the package name signals that it is not API.
+  History: while the implementation had five classes it stayed in the API package without a module descriptor;
+  once it grew to seven, a dedicated `internal` package with `module-info.java` became worth the extra machinery.
 - Match ids are generated inside the implementation. A client can still construct a `MatchId` (a record's canonical
   constructor is always public), but such an id never matches a started match and is rejected with `MatchNotFoundException`.
 - No frameworks or runtime dependencies — plain Java 25.

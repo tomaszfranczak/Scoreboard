@@ -1,12 +1,13 @@
-package io.github.tomaszfranczak.scoreboard;
+package io.github.tomaszfranczak.scoreboard.internal;
 
+import io.github.tomaszfranczak.scoreboard.Scoreboard;
 import io.github.tomaszfranczak.scoreboard.exception.MatchNotFoundException;
 import io.github.tomaszfranczak.scoreboard.model.Match;
 import io.github.tomaszfranczak.scoreboard.model.MatchId;
 
 import java.util.List;
 
-final class LiveScoreboard implements Scoreboard {
+public final class LiveScoreboard implements Scoreboard {
 
     private final Object writeLock = new Object();
     private volatile ScoreboardState state = ScoreboardState.EMPTY;
@@ -23,7 +24,7 @@ final class LiveScoreboard implements Scoreboard {
         synchronized (writeLock) {
             ScoreboardState current = state;
             MatchValidator.validateTeamsNotPlaying(match, current);
-            state = current.withMatch(match);
+            state = current.withStartedMatch(match);
         }
         return match.id();
     }
@@ -35,7 +36,7 @@ final class LiveScoreboard implements Scoreboard {
         synchronized (writeLock) {
             ScoreboardState current = state;
             Match match = matchInProgress(matchId, current);
-            state = current.withMatch(match.withScore(homeScore, awayScore));
+            state = current.withUpdatedMatch(match.withScore(homeScore, awayScore));
         }
     }
 

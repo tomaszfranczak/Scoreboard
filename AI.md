@@ -64,10 +64,11 @@ And the other way round, where the AI corrected my initial framing:
 | Area | Generated first | My feedback | Result |
 |---|---|---|---|
 | Responsibilities | Validation, name handling and state in one class | Separate the logic early; a method that returns a new value should not be named like a validation | `TeamNames` (normalization), `MatchValidator` (rules), `MatchFactory` (creating a valid match), `ScoreboardState` (immutable state), `LiveScoreboard` (orchestration and concurrency) |
-| Packages | Everything in one package | Packages per kind of class | `model` and `exception`; the implementation stays next to the interface to remain package-private (D9) |
+| State structure | Matches and start sequences in two parallel maps | I suggested splitting the responsibilities of the state | `StartedMatch` (a match with its sequence, one map) and `SummaryOrder` (the ordering rule, tested directly) |
+| Packages | Everything in one package | Packages per kind of class; later, a tidier main package | First `model` and `exception` with the implementation next to the interface; once the implementation grew, an `internal` package hidden by `module-info.java` (D9) |
 | Test structure | Flat test methods | Use given / when / then | `// given / when / then` markers (`// when & then` for assertions on thrown exceptions) and `@Nested` groups per operation |
 | Comments | Javadoc on the public API | The code and tests should explain themselves | No comments; rule added to CLAUDE.md |
-| Naming | `Scoreboard.inMemory()`, `MatchId.random()`, a public `withMatch`, a private `put` | Names should say what happens, in domain terms | `Scoreboard.create()`, ids generated inside the scoreboard, `ScoreboardState.withMatch` (adds or replaces), `Match.withScore` |
+| Naming | `Scoreboard.inMemory()`, `MatchId.random()`, a public `withMatch`, a private `put` | Names should say what happens, in domain terms | `Scoreboard.create()`, ids generated inside the scoreboard, `ScoreboardState.withStartedMatch` / `withUpdatedMatch` / `withoutMatch`, `Match.withScore` |
 | Defaults | `new Match(id, home, away, 0, 0)` | 0–0 is the default for a new match | Constructor without scores |
 | Playing-teams index | — | I asked whether a separate index for a fast check would be over-engineering | Yes for this scale; rejected with the condition for revisiting it (D4) |
 
@@ -395,6 +396,63 @@ CLAUDE.md rule that every user-visible change updates the changelog in the same 
 *AI:* agreed — entries now go newest first, consistent with the reverse-chronological order of versions; internal
 changes (Maven Wrapper, compiler flags) were removed, as the changelog is for library users; only the Java 25
 requirement stayed. Rule added to CLAUDE.md.
+
+### 18. Step 5 — ordering the summary
+
+> Let's go with the next part of the implementation.
+
+*AI:* added a `Match.totalScore()` stub and wrote the tests first: total score and its overflow, ordering by total,
+the tie-break by most recent start, ten matches started in a loop (the D3 trap — with a wall clock they would tie),
+order following updates, an update not refreshing the start order, finishing keeping the order of the others, and the
+example from the specification as an acceptance test through the public API only. 7 of 9 failed; 2 passed by chance
+because of the `HashMap` iteration order — reported as such. Proposed `long` for the total and the start counter inside
+`ScoreboardState` (the public record must not expose it), then stopped for review.
+
+> I fully agree with the `long` and the counter in the state. Let's implement.
+
+*AI:* the state assigns a start sequence only when a match is added for the first time and sorts the summary once per
+write (total descending, then sequence descending). All 148 tests passed in repeated clean runs, including the
+specification example. Changelog, D3 and the CLAUDE.md testing rule updated.
+
+> Why does the sequence change on an update?
+
+*AI:* it does not — that branch ran only for a new match, and a test guards it. But the question showed the code did
+not express its intent: the single `withMatch` from step 3 had to guess whether a match was new. With start sequences,
+adding and replacing genuinely differ, so the earlier argument against two methods (identical aliases) no longer held.
+Split into `withStartedMatch` (assigns the next sequence) and `withUpdatedMatch` (keeps it), without the guessing branch.
+
+> I'm thinking about splitting the responsibilities of `ScoreboardState` — the codebase is growing. Does it make sense?
+
+*AI:* yes, though not because of its size (about 75 lines) but because of its shape: two parallel maps (matches and
+start sequences) had to be kept in sync by hand in every operation — the same second-source-of-truth risk rejected
+earlier for the playing-teams index. Proposed two extractions and advised against more (a separate sequence generator
+or team registry would be ceremony): a package-private `StartedMatch` record keeping a match with its sequence in one
+map, and a `SummaryOrder` comparator giving the D3 rule one named, directly testable place.
+
+> Both make sense.
+
+*AI:* wrote `SummaryOrderTest` first (failing to compile), extracted both classes and reduced `ScoreboardState` to one
+map. Behaviour did not change: all 148 existing tests guarded the refactoring, plus 3 new ones for the ordering rule.
+
+> The main package has become messy — the classes can be organised properly.
+
+*AI:* pointed out the D9 trade-off again: package-private classes cannot see each other across packages, so every split
+forces classes to become public. Proposed a single `internal` package for the whole implementation (only
+`LiveScoreboard` public, the rest package-private) and, now that there are seven internal classes, the `module-info.java`
+rejected earlier for five — exporting only the API packages. Verified the build passed unchanged and that the jar
+descriptor exports three packages and only contains `internal`. Updated D9 with the history of the decision.
+
+> Isn't sorting in the state constructor too expensive on every write?
+
+*AI:* not under our assumptions: it is the D4 trade-off of paying on the rare writes so that the frequent reads are
+O(1), with n in the tens at most. Walked through the alternatives (sort on read, lazy sort, a tree, a persistent tree)
+and when the current choice would stop paying off, and noted that this is reasoning, not a measurement.
+
+> Let's record that as a trade-off — the tree as an alternative structure.
+
+*AI:* added a table to D4 comparing the sorted list with sorting on read, lazy sorting, an ordered tree and a
+persistent tree, including why a mutable tree does not combine with lock-free readers and why an update would be a
+remove plus re-insert.
 
 ## Artifacts that guided the implementation
 
