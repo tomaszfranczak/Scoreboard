@@ -454,6 +454,21 @@ and when the current choice would stop paying off, and noted that this is reason
 persistent tree, including why a mutable tree does not combine with lock-free readers and why an update would be a
 remove plus re-insert.
 
+### 19. Step 6 — concurrency across all operations
+
+> It's fine, let's go on.
+
+*AI:* added two concurrency tests: mixed starts, updates and finishes ending in a complete, correctly ordered state,
+and readers checking every summary they see (ordered, no team twice) while writers play matches. Since the
+implementation existed since step 2, the tests passed at once, so the AI ran a mutation check: with all `synchronized`
+blocks removed, every one of the six concurrency tests failed (98 of 105 runs); the code was then restored.
+Reported honestly that the reader test failed because writers lost operations, not because readers saw inconsistent
+data — consistent reads come from immutable snapshots even without the lock.
+
+> That's exactly what I was going to propose.
+
+*AI:* recorded the mutation check as a rule in CLAUDE.md for tests that pass as soon as they are written.
+
 ## Artifacts that guided the implementation
 
 - [docs/requirements-analysis.md](docs/requirements-analysis.md) — open questions, options, decisions and their origin.

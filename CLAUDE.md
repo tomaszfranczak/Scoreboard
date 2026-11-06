@@ -51,6 +51,8 @@ no runtime dependencies.
   and state validation in a nested `Validation` class; concurrency tests live in `ScoreboardConcurrencyTest`.
 - The summary order is defined (D3): assert it with `containsExactly` wherever order matters, and with
   `containsExactlyInAnyOrder` only where it does not.
+- A test that passes as soon as it is written proves nothing until it is shown to fail: break the code on purpose
+  (e.g. remove a lock or a check), confirm the test catches it, then restore the code.
 - Every commit keeps the build green: `./mvnw verify` (Windows: `mvnw.cmd verify`). Requires JDK 25.
   The compiler runs with `-Xlint:all -Werror`; check warnings with a **clean** build (`./mvnw clean verify`),
   since incremental builds do not recompile unchanged classes.
