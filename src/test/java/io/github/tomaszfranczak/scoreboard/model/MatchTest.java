@@ -34,6 +34,30 @@ class MatchTest {
     }
 
     @Test
+    void totalScoreIsTheSumOfBothScores() {
+        // given
+        Match match = new Match(id, "Mexico", "Canada", 2, 3);
+
+        // when
+        long total = match.totalScore();
+
+        // then
+        assertThat(total).isEqualTo(5);
+    }
+
+    @Test
+    void totalScoreDoesNotOverflowForTheHighestScores() {
+        // given
+        Match match = new Match(id, "Mexico", "Canada", Integer.MAX_VALUE, Integer.MAX_VALUE);
+
+        // when
+        long total = match.totalScore();
+
+        // then
+        assertThat(total).isEqualTo(2L * Integer.MAX_VALUE);
+    }
+
+    @Test
     void rejectsNullId() {
         // when & then
         assertThatThrownBy(() -> new Match(null, "Mexico", "Canada"))

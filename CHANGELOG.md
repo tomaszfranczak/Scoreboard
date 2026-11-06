@@ -15,6 +15,10 @@ Until 1.0.0 the project stays at `0.1.0-SNAPSHOT`; the version is set in the rel
 
 ### Added
 
+- Java module `io.github.tomaszfranczak.scoreboard` exporting the API packages (`scoreboard`, `scoreboard.model`,
+  `scoreboard.exception`); the implementation is not exported.
+- `Scoreboard.getSummary()` orders matches by total score (descending); matches with the same total are ordered
+  with the most recently started first. `Match.totalScore()` returns a `long`, so it cannot overflow.
 - `Scoreboard.finishMatch(matchId)` removing a match from the scoreboard; finishing or updating an unknown or already
   finished match throws `MatchNotFoundException`.
 - `Scoreboard.updateScore(matchId, homeScore, awayScore)` setting the absolute score; idempotent, scores may decrease
@@ -24,5 +28,5 @@ Until 1.0.0 the project stays at `0.1.0-SNAPSHOT`; the version is set in the rel
 - Validation when starting a match: `null` and blank team names, the same team on both sides, a team already playing
   in a match in progress; team names are compared case-insensitively, without surrounding whitespace.
 - `Scoreboard.create()`, `Scoreboard.startMatch(homeTeam, awayTeam)` returning an opaque `MatchId` (a new match starts
-  at 0–0), and `Scoreboard.getSummary()` returning an immutable snapshot of the matches in progress
-  (ordering not implemented yet). Requires Java 25.
+  at 0–0), and `Scoreboard.getSummary()` returning an immutable snapshot of the matches in progress.
+  Requires Java 25.

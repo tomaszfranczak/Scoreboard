@@ -1,5 +1,6 @@
 package io.github.tomaszfranczak.scoreboard;
 
+import io.github.tomaszfranczak.scoreboard.internal.LiveScoreboard;
 import io.github.tomaszfranczak.scoreboard.model.Match;
 import io.github.tomaszfranczak.scoreboard.model.MatchId;
 

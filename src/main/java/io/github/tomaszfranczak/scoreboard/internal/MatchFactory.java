@@ -1,4 +1,4 @@
-package io.github.tomaszfranczak.scoreboard;
+package io.github.tomaszfranczak.scoreboard.internal;
 
 import io.github.tomaszfranczak.scoreboard.model.Match;
 import io.github.tomaszfranczak.scoreboard.model.MatchId;

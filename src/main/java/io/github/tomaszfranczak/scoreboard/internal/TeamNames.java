@@ -1,4 +1,4 @@
-package io.github.tomaszfranczak.scoreboard;
+package io.github.tomaszfranczak.scoreboard.internal;
 
 final class TeamNames {
 

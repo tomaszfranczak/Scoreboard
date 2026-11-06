@@ -18,18 +18,21 @@ no runtime dependencies.
 - Immutable values are `record`s (`Match`, `MatchId`) that validate their own invariants in a compact constructor
   (no `null`s, no negative scores), so an invalid instance cannot exist.
 - Only the API is public; implementation classes are package-private.
-- Packages: `scoreboard` (interface, implementation, helpers), `scoreboard.model` (records),
-  `scoreboard.exception` (domain exceptions) — see D9.
+- Packages: `scoreboard` (API interface only), `scoreboard.model` (records), `scoreboard.exception` (domain exceptions),
+  `scoreboard.internal` (implementation; package-private except `LiveScoreboard`) — see D9.
+  `module-info.java` exports only the first three; never export `internal`, never split it into sub-packages.
 - Separation of responsibilities:
   - `LiveScoreboard` — orchestration and concurrency (D4): everything that does not depend on the state
     (normalization, stateless validation, ids, new objects) runs before the lock; inside `synchronized (writeLock)`
     only state-dependent checks and replacing the state; reads only read the `volatile` state
   - `MatchFactory` — builds a valid new `Match` from raw input (input checks, normalization, id); no state
   - `ScoreboardState` — immutable state; copies its collections itself; answers questions (`findMatch`, `isPlaying`)
-    and returns new versions of itself (`withMatch`; `withoutMatch` in step 4); takes whole `Match` objects, never builds them
+    and returns new versions of itself (`withStartedMatch`, `withUpdatedMatch`, `withoutMatch`); takes whole `Match` objects, never builds them
     from fields, and never decides what is an error; never pass mutable collections around
   - `MatchValidator` — business rules; `void` methods that throw; input checks (`null`, blank) run on the raw input
     before normalization, so messages can name the parameter
+  - `StartedMatch` — a match together with its start sequence, so the two can never get out of sync
+  - `SummaryOrder` — the ordering rule of the summary (D3), in one named place
   - `TeamNames` — normalization and comparison of team names
 - Method names say what they do: a method that returns a transformed value is not called `require…` or `validate…`.
 - Errors follow D6: `NullPointerException` for `null`, `IllegalArgumentException` for invalid values,
@@ -46,7 +49,8 @@ no runtime dependencies.
   is the assertion, e.g. `assertThatThrownBy`) — the only comments allowed.
 - One test class per operation (`StartMatchTest`, `UpdateScoreTest`, `FinishMatchTest`, `SummaryTest`), with input
   and state validation in a nested `Validation` class; concurrency tests live in `ScoreboardConcurrencyTest`.
-- Until ordering is implemented (plan step 5), do not assert the order of the summary.
+- The summary order is defined (D3): assert it with `containsExactly` wherever order matters, and with
+  `containsExactlyInAnyOrder` only where it does not.
 - Every commit keeps the build green: `./mvnw verify` (Windows: `mvnw.cmd verify`). Requires JDK 25.
   The compiler runs with `-Xlint:all -Werror`; check warnings with a **clean** build (`./mvnw clean verify`),
   since incremental builds do not recompile unchanged classes.
