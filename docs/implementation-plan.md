@@ -24,8 +24,8 @@ Decision ids (D1–D9) refer to [requirements-analysis.md](requirements-analysis
 **What it does:** the thinnest vertical slice. `startMatch` is only observable through `getSummary`,
 so both are built together.
 - `Scoreboard` interface with `startMatch(homeTeam, awayTeam)` and `getSummary()` only.
-- `Match` record (id, teams, scores, `totalScore()`) and `MatchId` record wrapping a `UUID` (D1).
-- Package-private in-memory implementation, created through a public factory (D9).
+- `Match` record (id, teams, scores) and `MatchId` record wrapping a `UUID` (D1).
+- Package-private implementation `LiveScoreboard`, created through `Scoreboard.create()` (D9).
 - A new match starts at 0–0 (D7).
 
 **Tests:**
@@ -82,6 +82,7 @@ so both are built together.
 
 **What it does:** the summary is ordered by total score (descending); ties go to the most recently started
 match first. Start order comes from a sequence counter, not the clock (D3).
+`Match.totalScore()` is added here, where it is first needed.
 
 **Tests:**
 - a higher total score comes first

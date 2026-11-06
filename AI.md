@@ -26,7 +26,7 @@ English translation, condensed but faithful in content. All code, documentation 
 
 1. Project skeleton (Maven, JDK 25, Maven Wrapper), set up with the AI and verified with `./mvnw verify`.
 2. Requirements analysis and design decisions, done as a dialogue → [docs/requirements-analysis.md](docs/requirements-analysis.md).
-3. Conventions file for the AI and an implementation plan with a prompt per step. *(to be completed)*
+3. Conventions file for the AI ([CLAUDE.md](CLAUDE.md)) and an implementation plan ([docs/implementation-plan.md](docs/implementation-plan.md)).
 4. TDD cycle per operation (start → update → finish → summary):
    1. **Red** — the AI writes failing tests for one operation; I review them against the spec and the decisions.
    2. **Green** — the AI writes the minimal implementation to make them pass.
@@ -44,6 +44,10 @@ English translation, condensed but faithful in content. All code, documentation 
 | Match identity | Opaque `MatchId` | I proposed a trading-style ticker (`POLMEX`) | Analysed as a natural key; rejected because of rematch collisions; UUID kept (D1) |
 | Out-of-order feed updates | Documented as a known limitation | I suggested that the event time could solve it | Turned into the additional feature: versioned score update (D8) |
 | Idempotency | Mentioned as one advantage among others | I required it to be documented explicitly | A dedicated idempotency section in D2 |
+| Commit granularity | Separate commits for tests and implementation | I rejected it as excessive | One commit per behaviour with its tests; the build is green in every commit |
+| Factory name | `Scoreboard.inMemory()` | I did not like the name | `Scoreboard.create()`, implementation named `LiveScoreboard` |
+| Id generation | `MatchId.random()` | I wanted the name to say that an id is generated, not how | `MatchId.generate()` |
+| Comments | Javadoc on the public API | I prefer self-explanatory code backed by tests | No comments; rule added to CLAUDE.md |
 
 And the other way round, where the AI corrected my initial framing:
 
@@ -116,7 +120,49 @@ since the extra feature must be an operation, a versioned update fits as a separ
 *AI:* the document read as a finished output; suggested recording the origin of each decision and marking
 the performance reasoning as not benchmarked.
 
+### 9. Commit granularity
+
+> Separate commits for tests are too much. Feature branches, yes, but not that.
+
+*AI:* agreed — a tests-only commit leaves a red build and breaks `git bisect`. Workflow changed to one commit per
+behaviour with tests and implementation together.
+
+### 10. Conventions and plan
+
+Original prompt (written in English):
+
+> Write a short CLAUDE.md for this repo. It should say:
+> - this is a simple Java 25 library, in memory, with no frameworks
+> - docs/requirements-analysis.md is the main reference; if something is missing there, ask me
+> - we use records for values, keep the implementation package-private, and use the exceptions from D6
+> - we write tests first (JUnit + AssertJ) and the build must pass after every commit
+>
+> Then write docs/implementation-plan.md with small steps. Start with the smallest thing:
+> start a match and see it in the summary. End with concurrency, the extra feature and the docs.
+> For each step, write what it does, which tests check it, and when it is done.
+> One step one commit.
+
+*AI:* wrote both files; added a short "boundaries" section (no new dependencies, no API beyond the decisions,
+no commits by the AI) and a rule not to assert summary order before the ordering step.
+
+### 11. Step 1 — start a match
+
+> Implement it step by step; I'll tell you what I don't like. For example, I don't like `inMemory`.
+
+*AI:* renamed the factory to `Scoreboard.create()` and the implementation to `LiveScoreboard`.
+Wrote the tests first and confirmed they failed (the API did not exist yet), then the minimal implementation.
+Left `Match.totalScore()` out until the ordering step, where it is first used, and updated the plan accordingly.
+
+> I don't like `random`, it should be something like `generateId`.
+
+*AI:* renamed it to `MatchId.generate()` — the `Id` suffix would repeat the type name at the call site.
+
+> We don't need comments; the code should explain itself together with the tests.
+
+*AI:* removed all Javadoc and the placeholder `package-info.java`, and added the rule to CLAUDE.md.
+
 ## Artifacts that guided the implementation
 
 - [docs/requirements-analysis.md](docs/requirements-analysis.md) — open questions, options, decisions and their origin.
-- *(to be added: conventions file for the AI, implementation plan)*
+- [CLAUDE.md](CLAUDE.md) — working context and boundaries for the AI.
+- [docs/implementation-plan.md](docs/implementation-plan.md) — the steps, their tests and definitions of done.
