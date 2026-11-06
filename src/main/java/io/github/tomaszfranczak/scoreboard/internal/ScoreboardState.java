@@ -32,10 +32,10 @@ final class ScoreboardState {
     boolean isPlaying(String team) {
         return matches.values().stream()
                 .map(StartedMatch::match)
-                .anyMatch(match -> TeamNames.same(match.homeTeam(), team) || TeamNames.same(match.awayTeam(), team));
+                .anyMatch(match -> plays(match, team));
     }
 
-    boolean isNewer(MatchId matchId, long sequenceNumber) {
+    boolean isNewerSequenceNumber(MatchId matchId, long sequenceNumber) {
         return matches.get(matchId).isNewer(sequenceNumber);
     }
 
@@ -44,26 +44,30 @@ final class ScoreboardState {
     }
 
     ScoreboardState withStartedMatch(Match match) {
-        Map<MatchId, StartedMatch> updated = new HashMap<>(matches);
-        updated.put(match.id(), new StartedMatch(match, nextStartIndex));
-        return new ScoreboardState(updated, nextStartIndex + 1);
+        return new ScoreboardState(copyWith(new StartedMatch(match, nextStartIndex)), nextStartIndex + 1);
     }
 
     ScoreboardState withUpdatedMatch(Match match) {
-        Map<MatchId, StartedMatch> updated = new HashMap<>(matches);
-        updated.put(match.id(), matches.get(match.id()).withMatch(match));
-        return new ScoreboardState(updated, nextStartIndex);
+        return new ScoreboardState(copyWith(matches.get(match.id()).withMatch(match)), nextStartIndex);
     }
 
     ScoreboardState withUpdatedMatch(Match match, long sequenceNumber) {
-        Map<MatchId, StartedMatch> updated = new HashMap<>(matches);
-        updated.put(match.id(), matches.get(match.id()).withMatch(match, sequenceNumber));
-        return new ScoreboardState(updated, nextStartIndex);
+        return new ScoreboardState(copyWith(matches.get(match.id()).withMatch(match, sequenceNumber)), nextStartIndex);
     }
 
     ScoreboardState withoutMatch(MatchId matchId) {
         Map<MatchId, StartedMatch> updated = new HashMap<>(matches);
         updated.remove(matchId);
         return new ScoreboardState(updated, nextStartIndex);
+    }
+
+    private Map<MatchId, StartedMatch> copyWith(StartedMatch started) {
+        Map<MatchId, StartedMatch> updated = new HashMap<>(matches);
+        updated.put(started.match().id(), started);
+        return updated;
+    }
+
+    private static boolean plays(Match match, String team) {
+        return TeamNames.same(match.homeTeam(), team) || TeamNames.same(match.awayTeam(), team);
     }
 }

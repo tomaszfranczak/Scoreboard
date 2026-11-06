@@ -1,281 +1,164 @@
 # Requirements Analysis
 
-This document captures how the (intentionally open) requirements were interpreted:
-the open questions, the options considered, and the decision taken for each.
-It is the primary design artifact that guided the implementation.
+How the intentionally open requirements were interpreted: the options considered and the decision taken for each.
+The decisions came out of a discussion with an AI assistant, summarised in [AI.md](../AI.md). Decisions shaped
+by that discussion have a short *Origin* note; the rest were proposed by the AI and accepted after review.
 
-Status legend: **Accepted** — decided and reviewed; **Open** — to be decided in a later phase.
+## Requirements
 
-The decisions were worked out in a discussion with an AI assistant (Claude Code); the dialogue is summarized
-in [AI.md](../AI.md). Decisions that changed or were shaped during that discussion have an **Origin** note;
-the others were proposed by the AI and accepted after review.
+1. Start a new match.
+2. Update the score.
+3. Finish a match.
+4. Get a summary of matches in progress, ordered by total score (descending); ties go to the most recently started match.
+5. Exactly one additional operation, in a distinct commit.
 
-## 1. Requirements as stated
+Constraints: a simple in-memory Java library in a Maven project, supporting multiple simultaneous matches.
 
-1. Start a new match
-2. Update the score
-3. Finish a match
-4. Get a summary of matches in progress, ordered by total score (descending);
-   ties broken by the most recently started match first
-5. Exactly one additional operation of our choice, introduced in a distinct commit
+## Decisions
 
-Constraints: a simple Java library in a Maven project, in-memory, supporting multiple simultaneous matches.
+### D1. Match identity
 
-## 2. Open questions in the requirements
-
-| Area | Question |
-|---|---|
-| Ordering | How is "most recently started" determined deterministically? |
-| Score update | Absolute score or increment? What about corrections and unreliable feeds? |
-| Identity | How does a caller refer to a match? |
-| Validation | Which inputs and states are illegal, and how are errors reported? |
-| Encapsulation | Can callers mutate internal state through returned objects? |
-| Concurrency | Is the library safe when used from multiple threads? |
-| Scope | Does the solution stay simple, or is it over-engineered? |
-
-## 3. Decisions
-
-### D1. Match identity — **Accepted**
-
-`startMatch` returns an opaque `MatchId` (a record wrapping a `UUID`). All other operations take the `MatchId`.
+`startMatch` returns an opaque `MatchId` (a record wrapping a `UUID`); all other operations take it.
 
 | Option | Pros | Cons |
 |---|---|---|
-| Team pair (`"Mexico", "Canada"`) | Simplest API; caller stores nothing | Stringly-typed; home/away swaps and typos; uniqueness relies on the "one live match per team" rule; collides on rematches |
-| Ticker-like natural key (`MEX-CAN`) | Human-readable; deterministic, caller can derive it | Same collisions as team pair (teams can meet twice in one World Cup, e.g. Italy–Poland 1982); requires a team-name → code registry |
-| **Opaque `MatchId` (UUID)** ✅ | Unambiguous regardless of business rules; type-safe; stable for future extensions (events, archive) | Caller must keep the id |
-| Mutable match handle (`match.updateScore(..)`) | Fluent | Leaks mutable state; breaks the aggregate boundary; complicates concurrency |
+| Team pair (`"Mexico", "Canada"`) | Simplest API | Typos and home/away swaps; collides on rematches |
+| Ticker-like key (`MEX-CAN`) | Readable, derivable by the caller | Same rematch collisions (Italy–Poland met twice in 1982); needs a name → code registry |
+| **Opaque `MatchId` (UUID)** ✅ | Unambiguous, type-safe | Caller must keep the id |
+| Mutable match handle | Fluent | Leaks mutable state, complicates concurrency |
 
-Identity (`MatchId`) is deliberately kept separate from start order (see D3),
-so callers are never tempted to compare ids to infer ordering.
+The id is kept separate from start order (D3), so nobody compares ids to infer ordering.
 
-> **Origin:** The AI listed team pair vs. opaque id vs. mutable handle. I proposed a trading-style ticker
-> (`POLMEX`, `GERSWE`) as a readable, derivable alternative; analysing it showed it is a natural key with the
-> same rematch collisions as the team pair, so it was rejected as identity. I chose UUID.
+*Origin: I proposed the ticker; analysed as a natural key, it was rejected for the same collisions as the team pair.*
 
-### D2. Score update semantics — **Accepted**
+### D2. Score update semantics
 
-`updateScore(matchId, homeScore, awayScore)` sets the **absolute** score.
+`updateScore(matchId, homeScore, awayScore)` sets the absolute score.
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Absolute score** ✅ | **Idempotent** — retries and duplicated feed messages are harmless; **self-healing** — the next update repairs a missed one; corrections (VAR, operator error) work naturally | No plausibility check on jumps (0–0 → 7–3); out-of-order messages can regress the score (last write wins) |
-| Increment (`homeTeamScored`) | Models the domain event; out-of-order delivery is harmless (increments commute) | **Not idempotent** — a duplicate double-counts, a lost message is lost forever; corrections need extra operations |
-| Both | Flexible | Larger API than the spec asks for |
+| **Absolute score** ✅ | Idempotent: retries and duplicates are harmless; the next update repairs a missed one; corrections work naturally | Out-of-order messages can regress the score |
+| Increment (`homeTeamScored`) | Models the event; order of arrival does not matter | Not idempotent: a duplicate double-counts, a lost message is lost forever |
 
-**Idempotency.** Applying the same `updateScore(id, h, a)` once or many times leaves the scoreboard in the same state.
-This matters for a sports data company: feeds are typically delivered *at least once*, so duplicates and retries are normal, not exceptional.
+Feeds are typically delivered at least once, so idempotency matters more than modelling events.
+Scores must be non-negative and may decrease (a disallowed goal). Out-of-order delivery is handled by D8.
 
-Rules:
-- Scores must be non-negative; negative values are rejected.
-- Scores **may decrease** — this is how corrections (e.g. a disallowed goal) are expressed.
-- Out-of-order delivery is **not** detected by `updateScore`; that is addressed by the additional operation (D8).
+*Origin: I asked for the explicit comparison with increments and required idempotency to be documented.*
 
-> **Origin:** The AI recommended absolute scores; I asked for the explicit trade-off against increments,
-> accepted absolute scores, and required idempotency to be documented as a first-class property.
+### D3. "Most recently started"
 
-### D3. "Most recently started" — **Accepted**
+Start order is a monotonic counter (the start index), not a timestamp: matches started in the same millisecond would
+tie, and a counter needs no injectable `Clock`. The index lives in the internal `StartedMatch`, is assigned only when a
+match starts (updates keep it) and is not exposed by the API. The ordering rule is the `SummaryOrder` comparator.
+`Match.totalScore()` returns a `long`, so two `int` scores cannot overflow.
 
-Start order is tracked with a **monotonic counter** (the start index), not a wall-clock timestamp.
+### D4. Concurrency
 
-- `Instant.now()` has limited resolution; matches started in the same millisecond (as in any unit test) would tie, making ordering non-deterministic.
-- A counter is deterministic, cheap, and needs no injectable `Clock`.
-- The start index is an internal detail and is not exposed in the public API.
+**Assumption** (not stated in the spec): the workload is read-heavy — many displays polling the summary,
+a few goals per match.
 
-Implementation: the counter lives in `ScoreboardState`, and each match is stored together with its start index as a
-package-private `StartedMatch`, not in the public `Match` record. The ordering rule is the `SummaryOrder` comparator.
-A start index is assigned only when a match is added for the first time, so score updates keep the original start order.
-The summary is sorted once per write — total score descending, then start index descending — so reads stay O(1) (D4).
-`Match.totalScore()` returns a `long`: the sum of two `int` scores cannot overflow, and no artificial upper bound
-on a score is needed.
+**Decision: copy-on-write.** Writes are serialised by one lock and publish a new immutable state, with the summary
+already sorted, through a `volatile` field. Reads take no lock and always get a consistent snapshot in O(1).
 
-### D4. Concurrency strategy — **Accepted**
-
-**Assumption:** the workload is read-heavy — many readers (displays, API clients polling the summary),
-very few writes (2–3 goals per match over 90 minutes). The spec does not state this; it is our assumption.
-
-**Decision: copy-on-write snapshot.**
-- Writes (start / update / finish) are serialized by a single lock. The writer builds a new immutable state,
-  *including the already sorted summary*, and publishes it through a `volatile` reference.
-- Reads (`getSummary`) take no lock: an O(1) volatile read that always returns a consistent snapshot.
-- Each write costs O(n log n) for n live matches — n is small and writes are rare.
-
-| Approach | Good when | Cost |
+| Approach | Good when | Why not here |
 |---|---|---|
-| `synchronized` / `ReentrantLock` | Low contention; comparable read/write rates; simplest | Readers block each other and writers |
-| `ReentrantReadWriteLock` | Many readers **and** long read sections | Higher per-acquisition overhead; CAS contention on the shared read count; possible writer starvation |
-| `StampedLock` (optimistic reads) | Very hot, very short reads | Harder to get right; not reentrant |
-| **Copy-on-write snapshot** ✅ | **Reads ≫ writes, small data set** | Every write copies and re-sorts; poor fit for frequent writes or large n |
-| `ConcurrentHashMap` alone | Independent per-key operations | Cannot enforce cross-key invariants (a team in at most one live match) without races; summary iteration is only weakly consistent |
-| Fine-grained locks (one lock per match, lock striping) | Many writers updating different resources, readers reading single resources | Writes to different matches could run in parallel, but every write changes the global sorted summary, which must still be published atomically — the serialisation point moves rather than disappears; starting a match spans two teams and all matches, so locks would have to be taken in a fixed order to avoid deadlock |
+| Single lock for reads and writes | Comparable read/write rates | Readers would block each other |
+| `ReentrantReadWriteLock` | Many readers and long read sections | Our read section is microseconds; readers still contend on the read count |
+| `StampedLock` | Very hot, very short reads | Harder to get right, not reentrant |
+| **Copy-on-write** ✅ | Reads ≫ writes, small n | Each write copies and re-sorts — fine at this scale |
+| `ConcurrentHashMap` alone | Independent per-key operations | "One match per team" spans several keys; `putIfAbsent` on a fresh `MatchId` never conflicts |
+| Lock per match | Many writers of different resources | Every write changes the global sorted summary, so writers still meet when publishing it; starting a match would need several locks in a fixed order |
+| Lock-free (`AtomicReference.updateAndGet`) | High write contention | Work is repeated on conflict; no gain with rare writes |
 
-Implementation notes:
-- The writer lock is a private `synchronized` monitor. Since JDK 24 (JEP 491) `synchronized` no longer pins virtual
-  threads, so `ReentrantLock` would add nothing here.
-- `ConcurrentHashMap.putIfAbsent` does not help: the key is a fresh `MatchId`, so it never conflicts, while the
-  invariant at risk ("a team plays in one match at a time") spans several entries. A lock-free variant would need a
-  second map of team reservations with rollback, and still would not give readers a consistent snapshot.
-- The validator receives the immutable state, never a live view of a mutable collection.
-- Domain exceptions (`TeamAlreadyPlayingException`, `MatchNotFoundException`) are thrown inside the critical section.
-  This is safe: leaving a `synchronized` block by an exception always releases the monitor (no `try/finally` to forget,
-  unlike `ReentrantLock`), and the state is replaced only as the last statement, so a failed operation changes nothing.
-  Creating the exception under the lock costs a few microseconds, only on the error path; moving the throw outside
-  the lock would make the code harder to read for no measurable gain.
-- The critical section holds only what depends on the current state: the "team already playing" check and
-  building the new state. Name normalization, stateless validation, id generation (`UUID.randomUUID()` uses
-  `SecureRandom`) and creating the `Match` happen before the lock is taken.
-- A lock-free alternative fits the immutable state naturally: `AtomicReference.updateAndGet` with the check and
-  the new state computed inside, retried on conflict. It was not chosen: under contention the work is repeated,
-  the update function must stay side-effect free, and with a minimal critical section and rare writes the lock
-  costs practically nothing while being easier to reason about.
-- **Fine-grained locking** (a lock per match instead of one for the whole scoreboard) was considered and rejected.
-  It reduces contention between writers of different matches, but here (1) every write changes the global, sorted
-  summary that readers receive as one consistent snapshot, so concurrent writes would still meet when publishing it;
-  (2) starting a match touches two teams and the set of all matches in progress, which would need several locks taken
-  in a fixed order to avoid deadlock; (3) there is little to gain — writers rarely wait for each other, the critical
-  section takes microseconds and readers take no lock at all. It would pay off with thousands of frequently updated
-  matches and clients reading single matches rather than the global summary — a different design than D4 altogether.
-- The "team already playing" check scans the matches in progress (O(n)). A separate index of playing teams would make
-  it O(1), but it was rejected: a World Cup has at most a handful of simultaneous matches, the index would be a second
-  source of truth to keep consistent on every start and finish, and it would be copied on every write as well.
-  Worth revisiting only if the scoreboard had to hold thousands of matches.
+Details:
+- The critical section holds only state-dependent work (the "already playing" check, building the new state);
+  validation, normalisation, id generation and object creation happen before the lock.
+- Exceptions thrown inside `synchronized` always release the monitor, and the state is replaced last, so a failed
+  operation changes nothing. `synchronized` no longer pins virtual threads since JDK 24 (JEP 491).
+- A separate index of playing teams was rejected: a World Cup has a handful of simultaneous matches, and the index would
+  be a second source of truth to keep in sync.
 
-**Keeping the summary sorted.** Every write copies the map (O(n)), copies it into an immutable map (O(n)), sorts
-(O(n log n)) and builds the list (O(n)); every read returns the ready list (O(1)).
+**Keeping the summary sorted.**
 
 | Structure | Write | Read | Trade-off |
 |---|---|---|---|
-| **Immutable map + list sorted on write** ✅ | O(n log n) | O(1) | Simplest; fits rare writes, frequent reads and small n |
-| Sort on every read | O(n) | O(n log n) | Cheaper writes, but every one of the frequent reads pays for the sort |
-| Lazily sorted on first read after a write | O(n) | O(1), first read O(n log n) | Saves sorting only for bursts of writes without reads in between; needs thread-safe lazy initialisation inside an immutable object (`StableValue` is only a preview in JDK 25) |
-| Ordered tree (`TreeSet` / `TreeMap` keyed by the summary order) | O(log n) insert / remove | O(n) to copy out a snapshot | Keeps the order incrementally, but: a mutable tree cannot be shared with lock-free readers, so copy-on-write would copy it anyway (O(n)); the sort key changes on every score update, so an update is remove + re-insert; the comparator must break all ties (start index) or the tree drops "equal" matches |
-| Persistent (immutable, structurally shared) tree | O(log n) | O(1) via a shared version | Gives both cheap writes and lock-free reads, but the JDK has no persistent collections — it would need a dependency or a hand-written structure; over-engineering at this scale |
+| **List sorted on write** ✅ | O(n log n) | O(1) | Simplest; fits rare writes and frequent reads |
+| Sort on every read | O(n) | O(n log n) | Every frequent read pays for the sort |
+| Sort lazily after a write | O(n) | O(1), first read O(n log n) | Helps only with write bursts; needs thread-safe lazy init |
+| Ordered tree (`TreeSet`) | O(log n) | O(n) snapshot copy | Cannot be shared with lock-free readers; an update is remove + re-insert; ties must be broken or matches are dropped |
+| Persistent tree | O(log n) | O(1) | No persistent collections in the JDK; over-engineering |
 
-A tree becomes worth it only when n is large **and** writes are frequent — the same point at which the copy-on-write
-strategy as a whole should be replaced (see above). At this scale the sorted list is the simplest correct choice.
+If writes became frequent and n large, the strategy would change to a single lock with sorting on read; the API would
+not change. These are reasoned estimates, not measurements — confirming them would need a JMH benchmark.
 
-`ReentrantReadWriteLock` was considered specifically because of the read-heavy assumption and rejected:
-our read section (copy + sort of a few dozen elements) is too short for it to pay off, and readers would still contend.
+*Origin: the AI first proposed a single lock; I pointed out that the choice depends on the read/write ratio and that
+a scoreboard is read-heavy, which led to copy-on-write. I also asked about per-match locking, now listed above.*
 
-If the workload changed (frequent writes, thousands of matches), the strategy should switch to a single lock with sort-on-read.
-Because callers only depend on the `Scoreboard` interface, that change would not affect the API.
+### D5. Validation and team names
 
-The performance arguments above are reasoning, **not measurements** — the scoreboard was not benchmarked.
-Confirming them would require a JMH benchmark under a realistic read/write ratio.
+- Team names are `String`s; `null` → `NullPointerException`, blank → `IllegalArgumentException`.
+- Surrounding whitespace is stripped; names are compared case-insensitively and kept as provided.
+- A team cannot play itself or take part in two matches in progress. A rejected start changes nothing.
+- Left out on purpose: collapsing internal whitespace (`"Costa  Rica"` ≠ `"Costa Rica"`), full Unicode case folding
+  (`"ß"` ≠ `"SS"`), a maximum name length.
 
-> **Origin:** The AI initially proposed a single coarse-grained lock. I pushed back: the choice between a plain lock
-> and a read-write lock is a trade-off that depends on the read/write ratio, and a scoreboard display is likely read-heavy.
-> Following that assumption, the AI argued that a read-write lock does not pay off for such short read sections and
-> proposed copy-on-write instead, which I accepted.
-
-### D5. Validation and team names — **Accepted**
-
-- Team names are `String`s in the API (no `Team` value object — not needed for this scope).
-- `null` → `NullPointerException`; blank → `IllegalArgumentException`.
-- Leading and trailing whitespace is stripped (`String.strip`, Unicode-aware); comparison for uniqueness is
-  **case-insensitive** (`"Spain"` and `" spain "` are the same team). The stripped name as provided is kept for display.
-- A match cannot be started with the same team on both sides.
-- A team cannot take part in more than one match in progress.
-- A rejected start leaves the scoreboard unchanged.
-
-Edge cases considered and deliberately left out:
-- Internal whitespace is not collapsed: `"Costa  Rica"` and `"Costa Rica"` are different teams.
-- Case-insensitive comparison is character by character (`String.equalsIgnoreCase`), without full Unicode
-  case folding — e.g. `"ß"` and `"SS"` are not equal. Team names are expected to come from a controlled source.
-- There is no maximum length for a team name.
-
-### D6. Error reporting — **Accepted**
-
-Follows JDK conventions for programming errors, with domain-specific unchecked exceptions for state violations:
+### D6. Error reporting
 
 | Situation | Exception |
 |---|---|
-| `null` argument | `NullPointerException` (`Objects.requireNonNull`) |
-| Invalid value (blank name, negative score, same team twice) | `IllegalArgumentException` |
-| Unknown or already finished match | `MatchNotFoundException` |
-| Team already playing in a match in progress | `TeamAlreadyPlayingException` |
+| `null` argument | `NullPointerException` |
+| Invalid value (blank name, negative score or sequence number, same team twice) | `IllegalArgumentException` |
+| Unknown or finished match | `MatchNotFoundException` |
+| Team already playing | `TeamAlreadyPlayingException` |
 
-Domain exceptions extend `RuntimeException`: callers cannot meaningfully recover from them at every call site,
-and checked exceptions would clutter the API.
+Domain exceptions are unchecked: callers cannot recover at every call site. `Match` and `MatchId` validate themselves
+too, so no invalid instance can exist; the non-negative score rule is therefore checked twice on purpose — once before
+the lock, once in the record.
 
-The public records (`Match`, `MatchId`) enforce the same rules in their compact constructors (`null` → NPE,
-negative score → IAE), so an invalid instance cannot be built even outside the scoreboard.
+### D7. Lifecycle
 
-The non-negative score rule therefore exists twice — in `MatchValidator` and in `Match` — on purpose:
-the validator rejects an invalid update before the write lock is taken (D4), and the record guarantees that no invalid
-`Match` can exist at all. Removing either would trade one of these guarantees for less code.
+A new match starts at 0–0. `finishMatch` removes it; finished matches are not kept. Finishing or updating an unknown
+or finished match throws `MatchNotFoundException`: an idempotent no-op would suit retries, but without keeping finished
+matches "already finished" cannot be told from "never existed".
 
-### D7. Lifecycle — **Accepted**
+### D8. Additional operation: score update with a sequence number
 
-- A new match starts at 0–0.
-- `finishMatch` removes the match from the scoreboard; finished matches are not retained.
-- Finishing an unknown or already finished match throws `MatchNotFoundException` (fail fast, makes caller bugs visible).
-  Trade-off: an idempotent no-op would be friendlier to retries, but since finished matches are not retained,
-  "already finished" cannot be distinguished from "never existed" — silently accepting both would hide real bugs.
+`boolean updateScore(MatchId matchId, int homeScore, int awayScore, long sequenceNumber)` applies the score only if
+the sequence number is higher than the last one applied to that match.
 
-### D8. Additional operation: score update with a sequence number — **Accepted** (details confirmed with the tests)
+It closes the one weakness of absolute updates (D2): a stale message arriving late can no longer overwrite a newer
+score, while a correction with a higher number still applies. A feed-provided sequence number (like `MsgSeqNum` in FIX)
+is preferred over a timestamp: no clock skew, no ties.
 
-An overload that applies a score only if its sequence number is higher than the last applied one:
-`boolean updateScore(MatchId matchId, int homeScore, int awayScore, long sequenceNumber)`.
+| Question | Decision |
+|---|---|
+| Form | An overload of `updateScore`; the existing one keeps `void`, as changing its return type after 1.0.0 would break binary compatibility |
+| Stale number | Not applied, returns `false` — out-of-order messages are expected, not exceptional |
+| Equal number | A duplicate, returns `false`; the same number with a different score is not detected |
+| Mixing with the unnumbered update | The unnumbered update is a manual correction: always applied, keeps the last number |
+| Validation | The number must be `>= 0`; the first numbered update of a match is always applied |
 
-Why:
-- It addresses the one weakness of absolute updates (D2): out-of-order delivery from an unreliable feed.
-- Stale messages are rejected while legitimate corrections (which carry a higher sequence number) still apply.
-- It reflects a real problem in the sports data domain, rather than a generic utility.
+The check and the state swap happen under the same lock, so concurrent messages cannot apply a lower number after
+a higher one.
 
-A source-provided **sequence number** is preferred over an event timestamp: it carries the same semantics without
-clock skew between sources or ties on identical timestamps. It is called a sequence number, not a version, because
-that is how feeds number their messages (e.g. `MsgSeqNum` in FIX): it orders messages, it does not version a score.
+*Origin: I suggested using the event time against out-of-order messages, chose this feature, the overload, and the
+feed term "sequence number".*
 
-> **Origin:** While discussing the out-of-order weakness of absolute updates, I suggested that the event time could solve it.
-> The AI pointed out it also resolves the "may scores decrease?" dilemma, recommended a source-provided number over a
-> timestamp (clock skew, ties), and noticed that the spec requires the extra feature to be an *operation*. I chose this
-> update as the additional feature, an `updateScore` overload as its form, and the feed term "sequence number" as its name.
+### D9. API and encapsulation
 
-**Name.** An overload of `updateScore` rather than a new name (`updateScoreIfNewer`, `applyScoreUpdate`): it is the same
-operation with ordering control, and the overload makes that relationship visible. The existing `updateScore` keeps
-returning `void` — changing its return type after 1.0.0 would break binary compatibility (`NoSuchMethodError` for
-compiled clients) and, under SemVer, require 2.0.0.
+- `getSummary()` returns an immutable list of immutable `Match` records.
+- Clients use `Scoreboard.create()` and the `Scoreboard` interface only.
+- Packages: `scoreboard` (interface), `model`, `exception`, `internal` (implementation). Inside `internal` only
+  `LiveScoreboard` is public; splitting it further would force more classes to become public.
+- `module-info.java` exports only the API packages.
+- A client can construct a `MatchId` (record constructors are public), but it never matches a started match.
+- No runtime dependencies.
 
-**Stale update** → not applied, returns `false`. Out-of-order messages are expected from an at-least-once feed, so an
-exception would use errors for normal flow; a `void` method would hide information the caller may want to count or log.
-
-**Equal sequence number** → a duplicate: not applied, returns `false`. Only a strictly higher number is applied. The
-same number with a different score indicates a bug at the source; it is not detected (that would need comparing scores
-and an extra exception).
-
-**Updates with and without a sequence number on the same match** → the update without a sequence number is a manual
-correction: it is always applied and leaves the last sequence number unchanged, so stale feed messages are still
-rejected afterwards. Rejected alternatives: resetting the sequence number (any stale message would then pass) and
-forbidding the mix per match (extra state and an extra exception).
-
-**Details.** The sequence number must be `>= 0` (`IllegalArgumentException` otherwise); a new match has none, so its
-first numbered update is always applied. The last sequence number is kept in the internal `StartedMatch`, not in the
-public `Match`. The check and the state swap happen under the same lock, so two concurrent messages cannot apply a
-lower number after a higher one.
-
-### D9. Public API surface and encapsulation — **Accepted**
-
-- `getSummary()` returns an immutable `List<Match>`; `Match` is an immutable record (id, teams, scores;
-  `totalScore()` is added with the ordering step).
-- Clients obtain an instance through `Scoreboard.create()` and depend only on the `Scoreboard` interface.
-- Packages: `scoreboard` (the `Scoreboard` interface only), `scoreboard.model` (`Match`, `MatchId`),
-  `scoreboard.exception` (domain exceptions), `scoreboard.internal` (the whole implementation).
-- Inside `internal` every class is package-private except `LiveScoreboard`, which `Scoreboard.create()` must reach.
-  The implementation is not split into further sub-packages: each split would force more classes to become public.
-- `module-info.java` exports only `scoreboard`, `model` and `exception`, so `internal` is inaccessible to clients on
-  the module path; on the class path the package name signals that it is not API.
-  History: while the implementation had five classes it stayed in the API package without a module descriptor;
-  once it grew to seven, a dedicated `internal` package with `module-info.java` became worth the extra machinery.
-- Match ids are generated inside the implementation. A client can still construct a `MatchId` (a record's canonical
-  constructor is always public), but such an id never matches a started match and is rejected with `MatchNotFoundException`.
-- No frameworks or runtime dependencies — plain Java 25.
-
-## 4. Assumptions (summary for README)
+## Assumptions
 
 1. The workload is read-heavy (D4).
-2. Score updates come from a feed with at-least-once delivery — duplicates are expected (D2).
+2. Feed messages are delivered at least once, possibly out of order (D2, D8).
 3. Scores may decrease to express corrections (D2).
-4. Team names are case-insensitive, with leading and trailing whitespace stripped (D5).
-5. Finished matches are not retained (D7).
-6. Everything is in memory; no persistence (spec).
+4. Team names are case-insensitive, without surrounding whitespace (D5).
+5. Finished matches are not kept (D7).
+6. Everything is in memory.

@@ -1,21 +1,21 @@
 # Implementation Plan
 
 Small steps, each ending in **one commit** that contains the tests and the implementation together
-and keeps `./mvnw verify` green. Each step is developed test-first: test cases are reviewed before
-the implementation is written.
+and keeps `./mvnw verify` green. Each step is developed test-first; from step 3 on, the tests were reviewed
+before the implementation was written.
 
 Decision ids (D1–D9) refer to [requirements-analysis.md](requirements-analysis.md).
 
-| # | Step | Branch |
-|---|---|---|
-| 1 | Start a match and see it in the summary | `feature/start-match` |
-| 2 | Validate starting a match | `feature/start-match-validation` |
-| 3 | Update the score | `feature/update-score` |
-| 4 | Finish a match | `feature/finish-match` |
-| 5 | Order the summary | `feature/summary-ordering` |
-| 6 | Concurrency across all operations | `feature/concurrency` |
-| 7 | Additional feature: score update with a sequence number | `feature/versioned-update` |
-| 8 | Documentation | `docs/readme` |
+| # | Step | Branch | Status |
+|---|---|---|---|
+| 1 | Start a match and see it in the summary | `feature/start-match` | Done |
+| 2 | Validate starting a match | `feature/start-match-validation` | Done |
+| 3 | Update the score | `feature/update-score` | Done |
+| 4 | Finish a match | `feature/finish-match` | Done |
+| 5 | Order the summary | `feature/summary-ordering` | Done |
+| 6 | Concurrency across all operations | `feature/concurrency` | Done, released as 1.0.0 |
+| 7 | Additional feature: score update with a sequence number | `feature/versioned-update` | Done |
+| 8 | Final review and documentation | `chore/final-polish` | Done, then release 1.1.0 |
 
 ---
 
