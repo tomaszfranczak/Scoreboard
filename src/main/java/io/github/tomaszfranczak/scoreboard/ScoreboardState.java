@@ -6,6 +6,7 @@ import io.github.tomaszfranczak.scoreboard.model.MatchId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 final class ScoreboardState {
 
@@ -19,10 +20,8 @@ final class ScoreboardState {
         this.summary = List.copyOf(this.matches.values());
     }
 
-    ScoreboardState addMatch(Match match) {
-        Map<MatchId, Match> updated = new HashMap<>(matches);
-        updated.put(match.id(), match);
-        return new ScoreboardState(updated);
+    Optional<Match> findMatch(MatchId matchId) {
+        return Optional.ofNullable(matches.get(matchId));
     }
 
     boolean isPlaying(String team) {
@@ -32,5 +31,11 @@ final class ScoreboardState {
 
     List<Match> summary() {
         return summary;
+    }
+
+    ScoreboardState withMatch(Match match) {
+        Map<MatchId, Match> updated = new HashMap<>(matches);
+        updated.put(match.id(), match);
+        return new ScoreboardState(updated);
     }
 }

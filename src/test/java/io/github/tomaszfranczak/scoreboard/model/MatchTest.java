@@ -21,6 +21,19 @@ class MatchTest {
     }
 
     @Test
+    void withScoreKeepsIdAndTeamsAndChangesOnlyTheScore() {
+        // given
+        Match match = new Match(id, "Mexico", "Canada");
+
+        // when
+        Match updated = match.withScore(0, 5);
+
+        // then
+        assertThat(updated).isEqualTo(new Match(id, "Mexico", "Canada", 0, 5));
+        assertThat(match).isEqualTo(new Match(id, "Mexico", "Canada", 0, 0));
+    }
+
+    @Test
     void rejectsNullId() {
         // when & then
         assertThatThrownBy(() -> new Match(null, "Mexico", "Canada"))

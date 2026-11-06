@@ -13,7 +13,9 @@
 - **Challenging the suggestions.** I did not accept the first proposal by default. Several design decisions changed
   after I pushed back or proposed alternatives (see [Design decisions changed through discussion](#design-decisions-changed-through-discussion)).
 - **Test-first implementation, reviewed by me.** For each step the AI wrote the tests first and ran them against the
-  existing code to see them fail, then wrote the implementation. I reviewed every result before committing and asked
+  existing code to see them fail, then wrote the implementation. In steps 1 and 2 tests and implementation were written
+  in one go and I reviewed them together; from step 3 on, the AI stopped after the failing tests and the API signature,
+  and implemented only after I had reviewed and accepted them. I reviewed every result before committing and asked
   for changes where I disagreed — mostly about responsibilities, naming and concurrency
   (see [Review feedback on the generated code](#review-feedback-on-the-generated-code)). Because behaviour is pinned
   by tests, these refactorings could be made safely. Each commit adds one behaviour together with its tests and keeps
@@ -64,7 +66,7 @@ And the other way round, where the AI corrected my initial framing:
 | Packages | Everything in one package | Packages per kind of class | `model` and `exception`; the implementation stays next to the interface to remain package-private (D9) |
 | Test structure | Flat test methods | Use given / when / then | `// given / when / then` markers (`// when & then` for assertions on thrown exceptions) and `@Nested` groups per operation |
 | Comments | Javadoc on the public API | The code and tests should explain themselves | No comments; rule added to CLAUDE.md |
-| Naming | `Scoreboard.inMemory()`, `MatchId.random()`, `withMatch` | Names should say what happens, not how | `Scoreboard.create()`, ids generated inside the scoreboard, `addMatch` |
+| Naming | `Scoreboard.inMemory()`, `MatchId.random()`, a public `withMatch`, a private `put` | Names should say what happens, in domain terms | `Scoreboard.create()`, ids generated inside the scoreboard, `ScoreboardState.withMatch` (adds or replaces), `Match.withScore` |
 | Defaults | `new Match(id, home, away, 0, 0)` | 0–0 is the default for a new match | Constructor without scores |
 | Playing-teams index | — | I asked whether a separate index for a fast check would be over-engineering | Yes for this scale; rejected with the condition for revisiting it (D4) |
 
@@ -278,6 +280,88 @@ check takes the `Match` instead of two strings.
 
 *AI:* yes — creating a match does not depend on the scoreboard state, so it moved to a package-private `MatchFactory`.
 `LiveScoreboard` is left with orchestration and concurrency only.
+
+### 16. Step 3 — update the score
+
+> Let's go on.
+
+*AI:* added the `updateScore` signature, `MatchNotFoundException` and a stub throwing `UnsupportedOperationException`,
+so the new tests compiled and failed (29 red: 9 unit tests and a concurrency test repeated 20 times), then stopped
+for review. Tests cover the summary showing the new score, idempotency (D2), lowering the score as a correction,
+isolation between matches, `null` id, negative scores, an unknown match, a rejected update leaving the state unchanged,
+and concurrent updates of different matches not being lost — moved forward from step 6, as the copy-on-write pattern
+already exists.
+
+> I accept, implement it.
+
+*AI:* stateless checks (`null` id, negative scores) run in `MatchValidator` before the lock; inside the lock a single call,
+`ScoreboardState.updateScore`, looks the match up, rejects an unknown id and returns the new state. All 107 tests passed
+in repeated clean runs.
+
+> The worst part is that we have no clear control over the events: if an old, stale event arrives — lost and delivered
+> out of order — this version has no way to detect it.
+
+*AI:* confirmed this is the known limitation of absolute updates recorded in D2: duplicates and missed updates are
+handled (idempotent, self-healing), but out-of-order delivery is not. It is deliberately left out of the core operation
+and addressed by the additional feature, the versioned update (D8, step 7), which must be a distinct commit anyway.
+
+> Do a thorough review of `ScoreboardState`. I don't like `put`, not even the name.
+
+*AI:* agreed that `put` was Map vocabulary hiding intent — adding and replacing a match went through the same call.
+The review found two more issues: the state built a `Match` from its fields (so it would have to change whenever the record
+gains a field, e.g. in steps 5 and 7), and it threw `MatchNotFoundException`, a rule decision that does not belong to
+the state. Refactored: the state answers questions (`findMatch`, `isPlaying`) and returns new versions of itself
+(`addMatch`, `replaceMatch`); the not-found rule moved to `LiveScoreboard`; `Match.withScore` builds the updated match.
+
+> `withScore` is fine.
+
+> For the private helper, `withMatch` fits now.
+
+*AI:* renamed it — inside the state, "this state with the match included" is exactly what it does.
+
+> Once more — review the whole thing, and do the tests cover everything in this version?
+
+*AI:* measured coverage with JaCoCo run once from the command line (no pom change): 100% lines and branches.
+Pointed out that coverage only shows every line ran, not that every behaviour is checked, and listed the gaps:
+no test that a summary taken earlier is unaffected by later writes (the D4 snapshot guarantee), no state check after
+an update of an unknown match, unchecked messages of the domain exceptions, and an undefined validation order.
+Also flagged the non-negative rule existing in both the validator and the record, a possible `int` overflow in the
+future `totalScore()`, and inconsistent continuation indentation.
+
+> Yes, add everything.
+
+*AI:* added the tests (they pass immediately — they guard existing behaviour against regressions), documented the
+duplicated rule as deliberate in D6, noted the overflow decision in plan step 5, unified continuation indentation and
+recorded it in `.editorconfig`.
+
+> What about the exception thrown inside the critical section?
+
+*AI:* it is safe — an exception leaving a `synchronized` block always releases the monitor, and with copy-on-write the state
+is replaced only as the last statement, so nothing is half-changed (already covered by a test). The only cost is creating
+the exception under the lock, on the error path only. Showed how to move the throw outside the lock and recommended
+against it for readability. Recorded the reasoning in D4.
+
+> Can't we wrap this more nicely? It's quite a long sequence; splitting it into smaller steps might be more readable.
+
+*AI:* extracted "find the match in progress or throw" into a private `matchInProgress`, named after the domain rather
+than the mechanics. The block under the lock now mirrors `startMatch` — read the state, one domain step, replace the
+state — and the helper will be reused by `finishMatch` in step 4.
+
+> Is reading `state` into `current` inside the lock needed? Wouldn't it be better to work on `state` directly?
+
+*AI:* both are correct — writers are serialized by the lock. Recommended keeping the local: it makes explicit that the
+check and the update use the same snapshot, and it is the shape a lock-free variant would need. Kept.
+
+> That `" must not be null"` could be a constant.
+
+*AI:* extracted the message suffixes (`null`, blank, negative) into private constants in `MatchValidator` and in `Match`;
+the record lives in another package, so a shared public messages class would not be worth it for three strings.
+
+> `addMatch` and `replaceMatch` both just call `withMatch` — does that make sense?
+
+*AI:* no — they were aliases whose names promised guarantees the code did not enforce (no overwrite on add, existence on
+replace). Enforcing them would add unreachable branches, since the callers already guarantee both. Replaced them with one
+`withMatch(Match)` ("this state with that match"), which will pair naturally with `withoutMatch` for finishing a match.
 
 ## Artifacts that guided the implementation
 

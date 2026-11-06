@@ -71,6 +71,8 @@ reads of a `volatile` snapshot. Every later write operation follows the same pat
 - `null` id → `NullPointerException`
 - an unknown id → `MatchNotFoundException`
 - updating one match does not change the others
+- a rejected update leaves the summary unchanged
+- concurrency: concurrent updates of different matches → no update is lost
 
 **Done when:** D2 is fully covered by tests and they pass.
 
@@ -91,7 +93,8 @@ reads of a `volatile` snapshot. Every later write operation follows the same pat
 
 **What it does:** the summary is ordered by total score (descending); ties go to the most recently started
 match first. Start order comes from a sequence counter, not the clock (D3).
-`Match.totalScore()` is added here, where it is first needed.
+`Match.totalScore()` is added here, where it is first needed. Summing two `int` scores can overflow at
+`Integer.MAX_VALUE`; decide here whether to compute the total as `long` or to set an upper bound for a score.
 
 **Tests:**
 - a higher total score comes first
@@ -107,7 +110,6 @@ match first. Start order comes from a sequence counter, not the clock (D3).
 This step verifies the operations together under concurrent load.
 
 **Tests** (started together through a latch, repeated to make races likely):
-- concurrent updates of different matches → no update is lost
 - concurrent starts, updates and finishes with reads → readers always see a complete, correctly ordered summary
 - summary obtained before a write does not change after it (snapshot)
 
