@@ -14,7 +14,7 @@ Decision ids (D1–D9) refer to [requirements-analysis.md](requirements-analysis
 | 4 | Finish a match | `feature/finish-match` |
 | 5 | Order the summary | `feature/summary-ordering` |
 | 6 | Concurrency across all operations | `feature/concurrency` |
-| 7 | Additional feature: versioned score update | `feature/versioned-update` |
+| 7 | Additional feature: score update with a sequence number | `feature/versioned-update` |
 | 8 | Documentation | `docs/readme` |
 
 ---
@@ -95,7 +95,7 @@ reads of a `volatile` snapshot. Every later write operation follows the same pat
 ## Step 5 — Order the summary
 
 **What it does:** the summary is ordered by total score (descending); ties go to the most recently started
-match first. Start order comes from a sequence counter, not the clock (D3).
+match first. Start order comes from a monotonic counter (the start index), not the clock (D3).
 `Match.totalScore()` is added here, where it is first needed. Summing two `int` scores can overflow at
 `Integer.MAX_VALUE`; decide here whether to compute the total as `long` or to set an upper bound for a score.
 
@@ -125,19 +125,23 @@ removed) must show that every concurrency test fails without the locks.
 **Release 1.0.0** (separate commit after this step): set the version in `pom.xml` to `1.0.0`, move the `[Unreleased]`
 entries in `CHANGELOG.md` to `[1.0.0]`, tag `v1.0.0`; then set the next development version `1.1.0-SNAPSHOT`.
 
-## Step 7 — Additional feature: versioned score update
+## Step 7 — Additional feature: score update with a sequence number
 
-**What it does:** a separate operation that applies a score only if its version is newer than the last
+**What it does:** an `updateScore` overload that applies a score only if its sequence number is higher than the last
 applied one (D8). Must be a **distinct commit**, as the spec requires.
 
-**Before coding:** decide the open questions in D8 (what happens to a stale update, how versioned and
-unversioned updates interact, what an equal version means) and update the requirements analysis.
+**Before coding:** decide the open questions in D8 (what happens to a stale update, how updates with and without
+a sequence number interact, what an equal number means) and update the requirements analysis.
 
-**Tests:** derived from the D8 decisions; at least:
-- a newer version is applied
-- an older version does not change the score
-- a correction with a newer version can lower the score
-- validation as in step 3 (null id, unknown id, negative score)
+**Tests:** derived from the D8 decisions:
+- the first numbered update is applied; a higher number is applied
+- a lower number arriving late, and the same number again, do not change the score (`false`)
+- a correction with a higher number can lower the score
+- an update without a sequence number is a manual correction that keeps the last number
+- sequence numbers are tracked per match
+- validation as in step 3, plus a negative sequence number
+- concurrency: many threads sending numbers 0–31 for one match → the highest number wins
+- mutation check: disabling the number check and removing the lock must make tests fail
 
 **Done when:** D8 has no open questions left, the tests pass, and the README has a section explaining the feature.
 

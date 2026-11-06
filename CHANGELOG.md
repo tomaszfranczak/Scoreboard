@@ -13,6 +13,12 @@ Between releases the version is a `-SNAPSHOT` of the next planned release; the f
 
 ## [Unreleased]
 
+### Added
+
+- `Scoreboard.updateScore(matchId, homeScore, awayScore, sequenceNumber)` applying a score only if its sequence number
+  is higher than the last one applied to that match; returns `false` for stale or duplicate messages, so scores from an
+  out-of-order feed can never go back. The update without a sequence number acts as a manual correction.
+
 ## [1.0.0] - 2026-11-06
 
 ### Added
@@ -32,6 +38,3 @@ Between releases the version is a `-SNAPSHOT` of the next planned release; the f
 - `Scoreboard.create()`, `Scoreboard.startMatch(homeTeam, awayTeam)` returning an opaque `MatchId` (a new match starts
   at 0–0), and `Scoreboard.getSummary()` returning an immutable snapshot of the matches in progress.
   Requires Java 25.
-
-[Unreleased]: https://github.com/tomaszfranczak/Scoreboard/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/tomaszfranczak/Scoreboard/releases/tag/v1.0.0

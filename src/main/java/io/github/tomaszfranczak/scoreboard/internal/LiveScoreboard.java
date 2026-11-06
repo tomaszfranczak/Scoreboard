@@ -41,6 +41,21 @@ public final class LiveScoreboard implements Scoreboard {
     }
 
     @Override
+    public boolean updateScore(MatchId matchId, int homeScore, int awayScore, long sequenceNumber) {
+        MatchValidator.validateSequencedScoreUpdate(matchId, homeScore, awayScore, sequenceNumber);
+
+        synchronized (writeLock) {
+            ScoreboardState current = state;
+            Match match = matchInProgress(matchId, current);
+            if (!current.isNewer(matchId, sequenceNumber)) {
+                return false;
+            }
+            state = current.withUpdatedMatch(match.withScore(homeScore, awayScore), sequenceNumber);
+            return true;
+        }
+    }
+
+    @Override
     public void finishMatch(MatchId matchId) {
         MatchValidator.validateMatchId(matchId);
 

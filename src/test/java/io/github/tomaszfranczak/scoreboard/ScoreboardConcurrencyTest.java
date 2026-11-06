@@ -118,6 +118,18 @@ class ScoreboardConcurrencyTest {
                 .containsExactlyElementsOf(expected);
     }
 
+    @RepeatedTest(20)
+    void concurrentSequencedUpdatesEndWithTheHighestSequenceNumber() throws Exception {
+        // given
+        MatchId id = scoreboard.startMatch("Mexico", "Canada");
+
+        // when
+        runConcurrently(i -> () -> scoreboard.updateScore(id, i, 0, i));
+
+        // then
+        assertThat(scoreboard.getSummary()).containsExactly(new Match(id, "Mexico", "Canada", THREADS - 1, 0));
+    }
+
     @RepeatedTest(5)
     void readersAlwaysSeeAConsistentSummaryWhileWritesHappen() throws Exception {
         // given

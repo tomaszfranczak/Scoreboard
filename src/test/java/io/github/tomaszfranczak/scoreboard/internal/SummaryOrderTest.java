@@ -56,8 +56,8 @@ class SummaryOrderTest {
                 .toList();
     }
 
-    private static StartedMatch startedMatch(int homeScore, int awayScore, long startSequence) {
+    private static StartedMatch startedMatch(int homeScore, int awayScore, long startIndex) {
         Match match = new Match(new MatchId(UUID.randomUUID()), "Home", "Away", homeScore, awayScore);
-        return new StartedMatch(match, startSequence);
+        return new StartedMatch(match, startIndex);
     }
 }

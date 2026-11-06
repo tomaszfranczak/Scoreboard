@@ -31,7 +31,7 @@ no runtime dependencies.
     from fields, and never decides what is an error; never pass mutable collections around
   - `MatchValidator` — business rules; `void` methods that throw; input checks (`null`, blank) run on the raw input
     before normalization, so messages can name the parameter
-  - `StartedMatch` — a match together with its start sequence, so the two can never get out of sync
+  - `StartedMatch` — a match together with its start index and last sequence number, so the two can never get out of sync
   - `SummaryOrder` — the ordering rule of the summary (D3), in one named place
   - `TeamNames` — normalization and comparison of team names
 - Method names say what they do: a method that returns a transformed value is not called `require…` or `validate…`.
