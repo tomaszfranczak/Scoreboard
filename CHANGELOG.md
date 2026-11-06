@@ -9,9 +9,11 @@ Release plan:
 - **1.0.0** — the four required operations are complete (start, update, finish, ordered summary).
 - **1.1.0** — the additional operation (versioned score update); a backward-compatible addition, hence a minor version.
 
-Until 1.0.0 the project stays at `0.1.0-SNAPSHOT`; the version is set in the release commit.
+Between releases the version is a `-SNAPSHOT` of the next planned release; the final version is set in the release commit.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-11-06
 
 ### Added
 
@@ -30,3 +32,6 @@ Until 1.0.0 the project stays at `0.1.0-SNAPSHOT`; the version is set in the rel
 - `Scoreboard.create()`, `Scoreboard.startMatch(homeTeam, awayTeam)` returning an opaque `MatchId` (a new match starts
   at 0–0), and `Scoreboard.getSummary()` returning an immutable snapshot of the matches in progress.
   Requires Java 25.
+
+[Unreleased]: https://github.com/tomaszfranczak/Scoreboard/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/tomaszfranczak/Scoreboard/releases/tag/v1.0.0
