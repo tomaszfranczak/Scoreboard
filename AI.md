@@ -363,6 +363,24 @@ the record lives in another package, so a shared public messages class would not
 replace). Enforcing them would add unreachable branches, since the callers already guarantee both. Replaced them with one
 `withMatch(Match)` ("this state with that match"), which will pair naturally with `withoutMatch` for finishing a match.
 
+### 17. Step 4 — finish a match
+
+> Merged, let's go with the next step.
+
+*AI:* added the `finishMatch` signature with a stub and wrote the tests first (28 red: 8 unit tests and a concurrency test
+repeated 20 times), then stopped for review. Tests cover removing the match, keeping the others with their scores,
+a rematch after finishing (the counterpart of the step 2 test that rejects it while the first match is in progress),
+`null` id, an unknown match, finishing twice and updating a finished match (both `MatchNotFoundException`, D7),
+a rejected finish leaving the state unchanged, and many threads finishing the same match with exactly one succeeding.
+
+> I accept the implementation. The test class keeps growing — I suggest splitting it into dedicated classes per feature.
+
+*AI:* implemented first (`MatchValidator.validateMatchId`, reused by the score update; `ScoreboardState.withoutMatch`;
+the existing `matchInProgress` helper reused under the lock), then split the tests into `StartMatchTest`,
+`UpdateScoreTest`, `FinishMatchTest` and `SummaryTest`, each with a nested `Validation` class. The split was done by
+moving whole blocks with a script; a first run dropped one line from two files, which the check caught — the list of
+executed test methods before and after the split was compared and is identical (139 tests).
+
 ## Artifacts that guided the implementation
 
 - [docs/requirements-analysis.md](docs/requirements-analysis.md) — open questions, options, decisions and their origin.

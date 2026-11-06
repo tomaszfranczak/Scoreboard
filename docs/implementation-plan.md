@@ -86,6 +86,9 @@ reads of a `volatile` snapshot. Every later write operation follows the same pat
 - finishing an unknown or already finished match → `MatchNotFoundException`
 - updating a finished match → `MatchNotFoundException`
 - after a match is finished, its teams can start a new match
+- finishing one match keeps the others with their scores
+- a rejected finish leaves the summary unchanged
+- concurrency: many threads finishing the same match → exactly one succeeds
 
 **Done when:** D7 is fully covered by tests and they pass.
 
