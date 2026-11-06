@@ -4,20 +4,28 @@ import io.github.tomaszfranczak.scoreboard.exception.MatchNotFoundException;
 import io.github.tomaszfranczak.scoreboard.exception.TeamAlreadyPlayingException;
 import io.github.tomaszfranczak.scoreboard.model.Match;
 import io.github.tomaszfranczak.scoreboard.model.MatchId;
+import org.assertj.core.groups.Tuple;
 import org.junit.jupiter.api.RepeatedTest;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntFunction;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 class ScoreboardConcurrencyTest {
 
@@ -87,6 +95,78 @@ class ScoreboardConcurrencyTest {
         // then
         assertThat(finished).containsOnlyOnce(true);
         assertThat(scoreboard.getSummary()).isEmpty();
+    }
+
+    @RepeatedTest(20)
+    void concurrentStartsUpdatesAndFinishesLeaveAConsistentState() throws Exception {
+        // when
+        runConcurrently(i -> () -> {
+            MatchId id = scoreboard.startMatch("Home " + i, "Away " + i);
+            scoreboard.updateScore(id, i, 0);
+            if (i % 2 == 0) {
+                scoreboard.finishMatch(id);
+            }
+            return null;
+        });
+
+        // then
+        List<Tuple> expected = IntStream.iterate(THREADS - 1, i -> i >= 0, i -> i - 2)
+                .mapToObj(i -> tuple("Home " + i, i))
+                .toList();
+        assertThat(scoreboard.getSummary())
+                .extracting(Match::homeTeam, Match::homeScore)
+                .containsExactlyElementsOf(expected);
+    }
+
+    @RepeatedTest(5)
+    void readersAlwaysSeeAConsistentSummaryWhileWritesHappen() throws Exception {
+        // given
+        int writers = THREADS / 2;
+        AtomicInteger writersLeft = new AtomicInteger(writers);
+        Queue<String> violations = new ConcurrentLinkedQueue<>();
+
+        // when
+        runConcurrently(i -> i < writers
+                ? () -> {
+                    try {
+                        playMatches(i);
+                    } finally {
+                        writersLeft.decrementAndGet();
+                    }
+                    return null;
+                }
+                : () -> {
+                    while (writersLeft.get() > 0) {
+                        collectViolations(scoreboard.getSummary(), violations);
+                    }
+                    return null;
+                });
+
+        // then
+        assertThat(violations).isEmpty();
+    }
+
+    private void playMatches(int writer) {
+        for (int round = 0; round < 20; round++) {
+            MatchId id = scoreboard.startMatch("Home " + writer, "Away " + writer);
+            for (int goals = 1; goals <= 5; goals++) {
+                scoreboard.updateScore(id, goals, round % 3);
+            }
+            scoreboard.finishMatch(id);
+        }
+    }
+
+    private static void collectViolations(List<Match> summary, Queue<String> violations) {
+        Set<String> teams = new HashSet<>();
+        for (int k = 0; k < summary.size(); k++) {
+            Match match = summary.get(k);
+            if (k > 0 && summary.get(k - 1).totalScore() < match.totalScore()) {
+                violations.add("Not ordered by total score: " + summary);
+            }
+            if (!teams.add(match.homeTeam().toLowerCase(Locale.ROOT)) || !teams.add(match.awayTeam().toLowerCase(Locale.ROOT))) {
+                violations.add("Team in more than one match: " + summary);
+            }
+        }
     }
 
     private List<MatchId> idsInSummary() {

@@ -113,10 +113,14 @@ match first. Start order comes from a sequence counter, not the clock (D3).
 This step verifies the operations together under concurrent load.
 
 **Tests** (started together through a latch, repeated to make races likely):
-- concurrent starts, updates and finishes with reads → readers always see a complete, correctly ordered summary
-- summary obtained before a write does not change after it (snapshot)
+- concurrent starts, updates and finishes → the final state is complete and correctly ordered
+- readers during concurrent writes → every summary they see is ordered and has no team twice
+- summary obtained before a write does not change after it (snapshot; covered in `SummaryTest` since step 3)
 
-**Done when:** all earlier tests still pass and the concurrency tests pass reliably.
+Since the implementation already exists, the new tests pass at once; a mutation check (all `synchronized` blocks
+removed) must show that every concurrency test fails without the locks.
+
+**Done when:** all earlier tests still pass, the concurrency tests pass reliably, and the mutation check is done.
 
 **Release 1.0.0** (separate commit after this step): set the version in `pom.xml` to `1.0.0`, move the `[Unreleased]`
 entries in `CHANGELOG.md` to `[1.0.0]`, tag `v1.0.0`; then set the next development version `1.1.0-SNAPSHOT`.
