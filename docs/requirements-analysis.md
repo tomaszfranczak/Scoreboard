@@ -76,16 +76,16 @@ Rules:
 
 ### D3. "Most recently started" — **Accepted**
 
-Start order is tracked with a **monotonic sequence counter**, not a wall-clock timestamp.
+Start order is tracked with a **monotonic counter** (the start index), not a wall-clock timestamp.
 
 - `Instant.now()` has limited resolution; matches started in the same millisecond (as in any unit test) would tie, making ordering non-deterministic.
 - A counter is deterministic, cheap, and needs no injectable `Clock`.
-- The sequence is an internal detail and is not exposed in the public API.
+- The start index is an internal detail and is not exposed in the public API.
 
-Implementation: the counter lives in `ScoreboardState`, and each match is stored together with its sequence as a
+Implementation: the counter lives in `ScoreboardState`, and each match is stored together with its start index as a
 package-private `StartedMatch`, not in the public `Match` record. The ordering rule is the `SummaryOrder` comparator.
-A sequence is assigned only when a match is added for the first time, so score updates keep the original start order.
-The summary is sorted once per write — total score descending, then sequence descending — so reads stay O(1) (D4).
+A start index is assigned only when a match is added for the first time, so score updates keep the original start order.
+The summary is sorted once per write — total score descending, then start index descending — so reads stay O(1) (D4).
 `Match.totalScore()` returns a `long`: the sum of two `int` scores cannot overflow, and no artificial upper bound
 on a score is needed.
 
@@ -107,6 +107,7 @@ very few writes (2–3 goals per match over 90 minutes). The spec does not state
 | `StampedLock` (optimistic reads) | Very hot, very short reads | Harder to get right; not reentrant |
 | **Copy-on-write snapshot** ✅ | **Reads ≫ writes, small data set** | Every write copies and re-sorts; poor fit for frequent writes or large n |
 | `ConcurrentHashMap` alone | Independent per-key operations | Cannot enforce cross-key invariants (a team in at most one live match) without races; summary iteration is only weakly consistent |
+| Fine-grained locks (one lock per match, lock striping) | Many writers updating different resources, readers reading single resources | Writes to different matches could run in parallel, but every write changes the global sorted summary, which must still be published atomically — the serialisation point moves rather than disappears; starting a match spans two teams and all matches, so locks would have to be taken in a fixed order to avoid deadlock |
 
 Implementation notes:
 - The writer lock is a private `synchronized` monitor. Since JDK 24 (JEP 491) `synchronized` no longer pins virtual
@@ -127,6 +128,13 @@ Implementation notes:
   the new state computed inside, retried on conflict. It was not chosen: under contention the work is repeated,
   the update function must stay side-effect free, and with a minimal critical section and rare writes the lock
   costs practically nothing while being easier to reason about.
+- **Fine-grained locking** (a lock per match instead of one for the whole scoreboard) was considered and rejected.
+  It reduces contention between writers of different matches, but here (1) every write changes the global, sorted
+  summary that readers receive as one consistent snapshot, so concurrent writes would still meet when publishing it;
+  (2) starting a match touches two teams and the set of all matches in progress, which would need several locks taken
+  in a fixed order to avoid deadlock; (3) there is little to gain — writers rarely wait for each other, the critical
+  section takes microseconds and readers take no lock at all. It would pay off with thousands of frequently updated
+  matches and clients reading single matches rather than the global summary — a different design than D4 altogether.
 - The "team already playing" check scans the matches in progress (O(n)). A separate index of playing teams would make
   it O(1), but it was rejected: a World Cup has at most a handful of simultaneous matches, the index would be a second
   source of truth to keep consistent on every start and finish, and it would be copied on every write as well.
@@ -140,7 +148,7 @@ Implementation notes:
 | **Immutable map + list sorted on write** ✅ | O(n log n) | O(1) | Simplest; fits rare writes, frequent reads and small n |
 | Sort on every read | O(n) | O(n log n) | Cheaper writes, but every one of the frequent reads pays for the sort |
 | Lazily sorted on first read after a write | O(n) | O(1), first read O(n log n) | Saves sorting only for bursts of writes without reads in between; needs thread-safe lazy initialisation inside an immutable object (`StableValue` is only a preview in JDK 25) |
-| Ordered tree (`TreeSet` / `TreeMap` keyed by the summary order) | O(log n) insert / remove | O(n) to copy out a snapshot | Keeps the order incrementally, but: a mutable tree cannot be shared with lock-free readers, so copy-on-write would copy it anyway (O(n)); the sort key changes on every score update, so an update is remove + re-insert; the comparator must break all ties (start sequence) or the tree drops "equal" matches |
+| Ordered tree (`TreeSet` / `TreeMap` keyed by the summary order) | O(log n) insert / remove | O(n) to copy out a snapshot | Keeps the order incrementally, but: a mutable tree cannot be shared with lock-free readers, so copy-on-write would copy it anyway (O(n)); the sort key changes on every score update, so an update is remove + re-insert; the comparator must break all ties (start index) or the tree drops "equal" matches |
 | Persistent (immutable, structurally shared) tree | O(log n) | O(1) via a shared version | Gives both cheap writes and lock-free reads, but the JDK has no persistent collections — it would need a dependency or a hand-written structure; over-engineering at this scale |
 
 A tree becomes worth it only when n is large **and** writes are frequent — the same point at which the copy-on-write
@@ -205,28 +213,46 @@ the validator rejects an invalid update before the write lock is taken (D4), and
   Trade-off: an idempotent no-op would be friendlier to retries, but since finished matches are not retained,
   "already finished" cannot be distinguished from "never existed" — silently accepting both would hide real bugs.
 
-### D8. Additional operation: versioned score update — **Accepted (details Open)**
+### D8. Additional operation: score update with a sequence number — **Accepted** (details confirmed with the tests)
 
-A separate operation that applies a score only if it is newer than the last applied one, e.g.
-`updateScore(matchId, homeScore, awayScore, version)`.
+An overload that applies a score only if its sequence number is higher than the last applied one:
+`boolean updateScore(MatchId matchId, int homeScore, int awayScore, long sequenceNumber)`.
 
 Why:
 - It addresses the one weakness of absolute updates (D2): out-of-order delivery from an unreliable feed.
-- Stale messages are rejected while legitimate corrections (which carry a newer version) still apply.
+- Stale messages are rejected while legitimate corrections (which carry a higher sequence number) still apply.
 - It reflects a real problem in the sports data domain, rather than a generic utility.
 
-A source-provided **version / sequence number** is preferred over an event timestamp: it carries the same semantics
-without clock skew between sources or ties on identical timestamps.
+A source-provided **sequence number** is preferred over an event timestamp: it carries the same semantics without
+clock skew between sources or ties on identical timestamps. It is called a sequence number, not a version, because
+that is how feeds number their messages (e.g. `MsgSeqNum` in FIX): it orders messages, it does not version a score.
 
 > **Origin:** While discussing the out-of-order weakness of absolute updates, I suggested that the event time could solve it.
-> The AI pointed out it also resolves the "may scores decrease?" dilemma, recommended a source version over a timestamp
-> (clock skew, ties), and noticed that the spec requires the extra feature to be an *operation* — so it fits as a separate method.
-> I chose the versioned update as the additional feature.
+> The AI pointed out it also resolves the "may scores decrease?" dilemma, recommended a source-provided number over a
+> timestamp (clock skew, ties), and noticed that the spec requires the extra feature to be an *operation*. I chose this
+> update as the additional feature, an `updateScore` overload as its form, and the feed term "sequence number" as its name.
 
-Open questions (to be decided when implementing the feature):
-- Is a stale update silently ignored, reported via a return value, or rejected with an exception?
-- How do the unversioned and versioned updates interact on the same match?
-- Is an equal version a duplicate (idempotent no-op) or a conflict?
+**Name.** An overload of `updateScore` rather than a new name (`updateScoreIfNewer`, `applyScoreUpdate`): it is the same
+operation with ordering control, and the overload makes that relationship visible. The existing `updateScore` keeps
+returning `void` — changing its return type after 1.0.0 would break binary compatibility (`NoSuchMethodError` for
+compiled clients) and, under SemVer, require 2.0.0.
+
+**Stale update** → not applied, returns `false`. Out-of-order messages are expected from an at-least-once feed, so an
+exception would use errors for normal flow; a `void` method would hide information the caller may want to count or log.
+
+**Equal sequence number** → a duplicate: not applied, returns `false`. Only a strictly higher number is applied. The
+same number with a different score indicates a bug at the source; it is not detected (that would need comparing scores
+and an extra exception).
+
+**Updates with and without a sequence number on the same match** → the update without a sequence number is a manual
+correction: it is always applied and leaves the last sequence number unchanged, so stale feed messages are still
+rejected afterwards. Rejected alternatives: resetting the sequence number (any stale message would then pass) and
+forbidding the mix per match (extra state and an extra exception).
+
+**Details.** The sequence number must be `>= 0` (`IllegalArgumentException` otherwise); a new match has none, so its
+first numbered update is always applied. The last sequence number is kept in the internal `StartedMatch`, not in the
+public `Match`. The check and the state swap happen under the same lock, so two concurrent messages cannot apply a
+lower number after a higher one.
 
 ### D9. Public API surface and encapsulation — **Accepted**
 

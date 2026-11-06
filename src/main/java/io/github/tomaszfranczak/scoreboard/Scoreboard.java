@@ -16,6 +16,8 @@ public interface Scoreboard {
 
     void updateScore(MatchId matchId, int homeScore, int awayScore);
 
+    boolean updateScore(MatchId matchId, int homeScore, int awayScore, long sequenceNumber);
+
     void finishMatch(MatchId matchId);
 
     List<Match> getSummary();

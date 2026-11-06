@@ -47,7 +47,7 @@ English translation, condensed but faithful in content. All code, documentation 
 | Timing of concurrency | Thread safety as a separate later step | I asked to take multithreading into account right away and questioned passing the internal map to the validator | Copy-on-write state introduced with the first business rule; the validator receives an immutable state |
 | Critical section | Whole validation, id generation and object creation inside the lock | I asked to keep the critical section minimal | Only state-dependent checks and the state swap are inside the lock |
 | Match identity | Opaque `MatchId` | I proposed a trading-style ticker (`POLMEX`) | Analysed as a natural key; rejected because of rematch collisions; UUID kept (D1) |
-| Out-of-order feed updates | Documented as a known limitation | I suggested that the event time could solve it | Turned into the additional feature: versioned score update (D8) |
+| Out-of-order feed updates | Documented as a known limitation | I suggested that the event time could solve it, and later chose the feature that closes this gap | The additional feature: an `updateScore` overload with a sequence number (D8) |
 | Idempotency | Mentioned as one advantage among others | I required it to be documented explicitly | A dedicated idempotency section in D2 |
 | Commit granularity | Separate commits for tests and implementation | I rejected it as excessive | One commit per behaviour with its tests; the build is green in every commit |
 | Changelog and versioning | Not part of the plan | I pointed out the missing changelog and versioning | `CHANGELOG.md` (Keep a Changelog) and a SemVer release plan: 1.0.0 for the required operations, 1.1.0 for the additional one; no back-dated versions |
@@ -468,6 +468,67 @@ data — consistent reads come from immutable snapshots even without the lock.
 > That's exactly what I was going to propose.
 
 *AI:* recorded the mutation check as a rule in CLAUDE.md for tests that pass as soon as they are written.
+
+### 20. Step 7 — choosing the additional feature
+
+> Let's think together about which direction to take the feature. What do you propose?
+
+*AI:* compared three candidates — a versioned score update, a change subscription (`subscribe(listener)`) and a lookup
+of the match in progress by team — and rejected others (history of finished matches, top-n summary, pause status) as
+conflicting with D7 or adding nothing. Recommended the versioned update for its continuity with the design: it closes
+the one weakness of absolute updates named in D2. Pointed out that a subscription, while technically richer, raises
+hard questions (callbacks under or after the lock, event ordering, slow or failing listeners) and risks over-engineering
+a simple library.
+
+> I propose a feature that solves the problem discovered during the implementation — out-of-order score messages —
+> with an additional method implementing it. But the name `updateScoreIfNewer` doesn't sit right with me.
+
+*AI:* proposed `applyScoreUpdate`, `updateVersionedScore`, an `updateScore` overload and a parameter object, and
+recommended `applyScoreUpdate`.
+
+> I'd go with the overload.
+
+*AI:* agreed — the overload shows it is the same operation with ordering control. Pointed out that only the new
+overload can return `boolean`: changing the existing `updateScore` from `void` after 1.0.0 would break binary
+compatibility and require 2.0.0 under SemVer. Recorded the D8 decisions (stale and equal versions return `false`, the
+unversioned update acts as a manual correction that keeps the version, versions must be non-negative) as proposals
+to be confirmed together with the tests.
+
+### 21. Step 7 — implementing the feature
+
+> I accept, implement it.
+
+*AI:* the internal `StartedMatch` keeps the last applied number; the check and the state swap happen under the lock.
+All 208 tests passed in repeated runs. Mutation check: with the number check disabled, three unit tests and the
+concurrency test failed; with the lock removed from the new method, the concurrency test failed in 1 of 20
+repetitions. Measured over 200 repetitions, it failed in 35 (17.5%) and in every one of 10 runs of 20, while the
+correct code failed in none of 200 — so each build would catch the missing lock, and the test was left unchanged.
+
+> Feeds often number consecutive messages with a sequence id — maybe that fits the domain better.
+
+*AI:* agreed that "version" suggested versioning the score rather than ordering messages, and proposed
+`sequenceNumber` rather than `sequenceId`, since the value is compared, not just used to tell messages apart.
+Renamed the parameter, the validation, the internal fields and the tests, and rewrote D8 and plan step 7 in those terms.
+To keep "sequence" reserved for feed messages, also proposed renaming the internal `startSequence` to `startOrder`.
+
+> `sequenceNumber` is great, but `startOrder` doesn't sit right with me.
+
+*AI:* offered `startIndex`, `kickOffOrder` and `startOrdinal`, recommending `startIndex`.
+
+> `startIndex`.
+
+*AI:* renamed the field and the counter (`nextStartIndex`) and updated D3, the plan and CLAUDE.md.
+
+> Couldn't we lock the specific resource being changed instead of the whole collection? Maybe we should go in the
+> direction of that optimisation.
+
+*AI:* explained why fine-grained locking would not help here: every write changes the global sorted summary that must
+be published as one snapshot, starting a match spans two teams and all matches (several locks in a fixed order), and
+writers rarely contend anyway. Named the conditions under which it would pay off.
+
+> Add it to the trade-offs.
+
+*AI:* added fine-grained locking to the D4 table and notes as a considered and rejected alternative.
 
 ## Artifacts that guided the implementation
 

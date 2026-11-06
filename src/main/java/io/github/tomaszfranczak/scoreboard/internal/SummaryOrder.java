@@ -6,7 +6,7 @@ final class SummaryOrder {
 
     static final Comparator<StartedMatch> BY_TOTAL_SCORE_THEN_MOST_RECENT_START =
             Comparator.comparingLong((StartedMatch started) -> started.match().totalScore())
-                    .thenComparingLong(StartedMatch::startSequence)
+                    .thenComparingLong(StartedMatch::startIndex)
                     .reversed();
 
     private SummaryOrder() {

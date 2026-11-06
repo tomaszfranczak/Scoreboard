@@ -13,6 +13,7 @@ final class MatchValidator {
     private static final String MATCH_ID = "matchId";
     private static final String HOME_SCORE = "homeScore";
     private static final String AWAY_SCORE = "awayScore";
+    private static final String SEQUENCE_NUMBER = "sequenceNumber";
 
     private static final String MUST_NOT_BE_NULL = " must not be null";
     private static final String MUST_NOT_BE_BLANK = " must not be blank";
@@ -29,6 +30,11 @@ final class MatchValidator {
         validateMatchId(matchId);
         requireNonNegative(homeScore, HOME_SCORE);
         requireNonNegative(awayScore, AWAY_SCORE);
+    }
+
+    static void validateSequencedScoreUpdate(MatchId matchId, int homeScore, int awayScore, long sequenceNumber) {
+        validateScoreUpdate(matchId, homeScore, awayScore);
+        requireNonNegative(sequenceNumber, SEQUENCE_NUMBER);
     }
 
     static void validateTeamNames(String homeTeam, String awayTeam) {
@@ -54,9 +60,9 @@ final class MatchValidator {
         }
     }
 
-    private static void requireNonNegative(int score, String parameter) {
-        if (score < 0) {
-            throw new IllegalArgumentException(parameter + MUST_NOT_BE_NEGATIVE + score);
+    private static void requireNonNegative(long value, String parameter) {
+        if (value < 0) {
+            throw new IllegalArgumentException(parameter + MUST_NOT_BE_NEGATIVE + value);
         }
     }
 
