@@ -13,7 +13,7 @@ Decision ids (D1–D9) refer to [requirements-analysis.md](requirements-analysis
 | 3 | Update the score | `feature/update-score` |
 | 4 | Finish a match | `feature/finish-match` |
 | 5 | Order the summary | `feature/summary-ordering` |
-| 6 | Make the scoreboard thread-safe | `feature/concurrency` |
+| 6 | Concurrency across all operations | `feature/concurrency` |
 | 7 | Additional feature: versioned score update | `feature/versioned-update` |
 | 8 | Documentation | `docs/readme` |
 
@@ -39,16 +39,25 @@ so both are built together.
 
 ## Step 2 — Validate starting a match
 
-**What it does:** applies the rules from D5 and D6 to `startMatch`.
+**What it does:** applies the rules from D5 and D6 to `startMatch`, and makes starting thread-safe.
+The "team plays in one match at a time" rule is a check-then-act across several entries, so the copy-on-write
+state from D4 is introduced here rather than in step 6: an immutable `ScoreboardState`, writes under one lock,
+reads of a `volatile` snapshot. Every later write operation follows the same pattern.
 
 **Tests:**
-- `null` team name → `NullPointerException`
-- blank team name → `IllegalArgumentException`
+- `null` team name → `NullPointerException`, the message names the side
+- blank team name → `IllegalArgumentException`, the message names the side
+- team names keep the spelling as provided; names differing in internal whitespace are different teams
+- `Match` and `MatchId` reject `null`s and negative scores themselves
 - the same team on both sides → `IllegalArgumentException`, also when it differs only in case or whitespace
 - a team already playing (home or away) → `TeamAlreadyPlayingException`, also with different case or whitespace
 - team names are stored trimmed
+- a rematch with swapped sides while the first match is in progress → `TeamAlreadyPlayingException`
+- a rejected start leaves the summary unchanged
+- concurrency: many threads starting matches with different teams → all matches are present
+- concurrency: many threads starting matches with the same team → exactly one succeeds
 
-**Done when:** all rules from D5 are covered by tests and pass.
+**Done when:** all rules from D5 are covered by tests and pass, and the concurrency tests pass reliably.
 
 ## Step 3 — Update the score
 
@@ -92,16 +101,14 @@ match first. Start order comes from a sequence counter, not the clock (D3).
 
 **Done when:** the spec scenario produces exactly the expected order.
 
-## Step 6 — Make the scoreboard thread-safe
+## Step 6 — Concurrency across all operations
 
-**What it does:** replaces the single-threaded state with the copy-on-write snapshot from D4:
-writes are serialized by one lock and publish a new immutable state with a pre-sorted summary;
-reads take no lock. The tests from steps 1–5 protect this refactoring.
+**What it does:** the copy-on-write state exists since step 2 and every write operation uses it.
+This step verifies the operations together under concurrent load.
 
-**Tests** (concurrency tests, started together through a latch, repeated to make races likely):
-- many threads starting matches with different teams → all matches are present
-- many threads starting matches with the same team → exactly one succeeds
-- concurrent updates and reads → readers always see a complete, correctly ordered summary
+**Tests** (started together through a latch, repeated to make races likely):
+- concurrent updates of different matches → no update is lost
+- concurrent starts, updates and finishes with reads → readers always see a complete, correctly ordered summary
 - summary obtained before a write does not change after it (snapshot)
 
 **Done when:** all earlier tests still pass and the concurrency tests pass reliably.

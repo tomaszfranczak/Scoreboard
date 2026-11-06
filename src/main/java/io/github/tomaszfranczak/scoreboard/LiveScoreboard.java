@@ -1,22 +1,29 @@
 package io.github.tomaszfranczak.scoreboard;
 
-import java.util.HashMap;
+import io.github.tomaszfranczak.scoreboard.model.Match;
+import io.github.tomaszfranczak.scoreboard.model.MatchId;
+
 import java.util.List;
-import java.util.Map;
 
 final class LiveScoreboard implements Scoreboard {
 
-    private final Map<MatchId, Match> matches = new HashMap<>();
+    private final Object writeLock = new Object();
+    private volatile ScoreboardState state = ScoreboardState.EMPTY;
 
     @Override
     public MatchId startMatch(String homeTeam, String awayTeam) {
-        MatchId id = MatchId.generate();
-        matches.put(id, new Match(id, homeTeam, awayTeam, 0, 0));
-        return id;
+        Match match = MatchFactory.create(homeTeam, awayTeam);
+
+        synchronized (writeLock) {
+            ScoreboardState current = state;
+            MatchValidator.validateTeamsNotPlaying(match, current);
+            state = current.addMatch(match);
+        }
+        return match.id();
     }
 
     @Override
     public List<Match> getSummary() {
-        return List.copyOf(matches.values());
+        return state.summary();
     }
 }

@@ -1,5 +1,8 @@
 package io.github.tomaszfranczak.scoreboard;
 
+import io.github.tomaszfranczak.scoreboard.model.Match;
+import io.github.tomaszfranczak.scoreboard.model.MatchId;
+
 import java.util.List;
 
 public interface Scoreboard {
