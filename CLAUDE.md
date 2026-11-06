@@ -19,6 +19,7 @@ no runtime dependencies.
 - Only the API is public; implementation classes are package-private.
 - Errors follow D6: `NullPointerException` for `null`, `IllegalArgumentException` for invalid values,
   `MatchNotFoundException` and `TeamAlreadyPlayingException` for state violations.
+- No comments or Javadoc: the code explains itself through names, and the tests describe the behaviour.
 - Keep it simple: no code for requirements we have not reached yet.
 
 ## Testing
