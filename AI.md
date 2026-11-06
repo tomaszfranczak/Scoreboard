@@ -1,538 +1,140 @@
 # AI Usage
 
-> Draft — updated as the work progresses.
-
 ## Summary
 
-**Tool:** Claude Code (model: Claude Opus 5.5), used in the Claude desktop app with access to the repository.
+Tool: Claude Code (Claude Opus 5.5) in the Claude desktop app, with access to the repository.
 
-**How I used it:**
-- **Requirements analysis first, code later.** Before writing any code I used the AI as a sparring partner
-  to surface the open questions in the spec and to compare design options. I took the decisions;
-  the outcome is recorded in [docs/requirements-analysis.md](docs/requirements-analysis.md), together with how the key decisions were reached.
-- **Challenging the suggestions.** I did not accept the first proposal by default. Several design decisions changed
-  after I pushed back or proposed alternatives (see [Design decisions changed through discussion](#design-decisions-changed-through-discussion)).
-- **Test-first implementation, reviewed by me.** For each step the AI wrote the tests first and ran them against the
-  existing code to see them fail, then wrote the implementation. In steps 1 and 2 tests and implementation were written
-  in one go and I reviewed them together; from step 3 on, the AI stopped after the failing tests and the API signature,
-  and implemented only after I had reviewed and accepted them. I reviewed every result before committing and asked
-  for changes where I disagreed — mostly about responsibilities, naming and concurrency
-  (see [Review feedback on the generated code](#review-feedback-on-the-generated-code)). Because behaviour is pinned
-  by tests, these refactorings could be made safely. Each commit adds one behaviour together with its tests and keeps
-  the build green; each stage is developed on its own feature branch. *(to be completed)*
-- **Separate review passes.** At checkpoints I asked for an independent code review (a separate AI agent) and a review
-  of the documentation for accuracy. *(to be completed)*
+- **Design before code.** I used the AI as a sparring partner to find the open questions in the spec and compare
+  options. I made the decisions; they are recorded in [docs/requirements-analysis.md](docs/requirements-analysis.md).
+- **Context for the AI.** [CLAUDE.md](CLAUDE.md) holds the conventions and boundaries; the
+  [implementation plan](docs/implementation-plan.md) splits the work into small steps with tests and a definition of done.
+- **Test-first, reviewed by me.** The AI wrote the tests first and ran them red, then implemented. In steps 1–2 I
+  reviewed tests and code together; from step 3 on, the AI stopped after the failing tests and implemented only after
+  I accepted them. Tests that passed immediately were checked by breaking the code on purpose (mutation check).
+- **Challenging the output.** Several design decisions changed after I pushed back, and I reviewed every piece of
+  generated code before committing (tables below).
+- **Independent reviews.** At checkpoints I asked for a separate AI code review, a documentation accuracy review and a
+  final review for structure, readability, SOLID, test coverage and document length.
 
-**Language note:** the conversation was held in Polish, my native language. The prompt history below is my
-English translation, condensed but faithful in content. All code, documentation and commit messages are in English.
-
-## Workflow
-
-1. Project skeleton (Maven, JDK 25, Maven Wrapper), set up with the AI and verified with `./mvnw verify`.
-2. Requirements analysis and design decisions, done as a dialogue → [docs/requirements-analysis.md](docs/requirements-analysis.md).
-3. Conventions file for the AI ([CLAUDE.md](CLAUDE.md)) and an implementation plan ([docs/implementation-plan.md](docs/implementation-plan.md)).
-4. Per step:
-   1. **Red** — the AI writes the tests for the step and runs them to confirm they fail.
-   2. **Green** — the AI writes the implementation to make them pass.
-   3. **Review and refactor** — I review the tests and the code; changes I ask for are made with the tests green.
-   4. **Commit** — one commit per behaviour, containing both the tests and the implementation.
-5. Concurrency, then the additional feature (in a distinct commit), following the same cycle.
-6. README and final pass on this file.
+The conversation was in Polish; the prompts below are my condensed English translation.
 
 ## Design decisions changed through discussion
 
-| Topic | AI's initial suggestion | What changed it | Outcome |
+| Topic | AI's first suggestion | What changed it | Outcome |
 |---|---|---|---|
-| Concurrency strategy | One coarse-grained lock | I pointed out that the lock choice depends on the read/write ratio and that a scoreboard display is read-heavy | Copy-on-write snapshot; read-write lock considered and rejected for short read sections (D4) |
-| Timing of concurrency | Thread safety as a separate later step | I asked to take multithreading into account right away and questioned passing the internal map to the validator | Copy-on-write state introduced with the first business rule; the validator receives an immutable state |
-| Critical section | Whole validation, id generation and object creation inside the lock | I asked to keep the critical section minimal | Only state-dependent checks and the state swap are inside the lock |
-| Match identity | Opaque `MatchId` | I proposed a trading-style ticker (`POLMEX`) | Analysed as a natural key; rejected because of rematch collisions; UUID kept (D1) |
-| Out-of-order feed updates | Documented as a known limitation | I suggested that the event time could solve it, and later chose the feature that closes this gap | The additional feature: an `updateScore` overload with a sequence number (D8) |
-| Idempotency | Mentioned as one advantage among others | I required it to be documented explicitly | A dedicated idempotency section in D2 |
-| Commit granularity | Separate commits for tests and implementation | I rejected it as excessive | One commit per behaviour with its tests; the build is green in every commit |
-| Changelog and versioning | Not part of the plan | I pointed out the missing changelog and versioning | `CHANGELOG.md` (Keep a Changelog) and a SemVer release plan: 1.0.0 for the required operations, 1.1.0 for the additional one; no back-dated versions |
+| Concurrency strategy | One coarse-grained lock | I pointed out that it depends on the read/write ratio and a scoreboard is read-heavy | Copy-on-write snapshot (D4) |
+| Timing of concurrency | A separate later step | I asked to handle threads right away and questioned passing the internal map around | Immutable state from the first business rule |
+| Critical section | All validation inside the lock | I asked to keep the critical section minimal | Only state-dependent work under the lock |
+| Per-match locking | — | I asked whether to lock single matches instead of the whole collection | Analysed and rejected; recorded in D4 |
+| Match identity | Opaque `MatchId` | I proposed a trading-style ticker (`POLMEX`) | Rejected for rematch collisions; UUID kept (D1) |
+| Out-of-order messages | A documented limitation | I suggested using event time, then chose the feature that closes the gap | `updateScore` overload with a sequence number (D8) |
+| Feature naming | `updateScoreIfNewer`, then `version` | I chose an overload and the feed term "sequence number" | `updateScore(..., sequenceNumber)` |
+| Idempotency | One advantage among others | I asked for it to be documented explicitly | Part of D2 |
+| Commits | Separate commits for tests | I rejected it as excessive | One commit per behaviour, green build |
+| Changelog and versioning | Not planned | I pointed out the gap | `CHANGELOG.md` and a SemVer plan: 1.0.0 core, 1.1.0 feature |
 
-And the other way round, where the AI corrected my initial framing:
+Where the AI corrected me:
 
-| My initial assumption | AI's correction | Outcome |
+| My assumption | Correction | Outcome |
 |---|---|---|
-| The task is mainly about multithreading | "Multiple simultaneous matches" means many matches at once, not necessarily many threads; thread safety is still a reasonable assumption, but should be stated as one | Read-heavy, thread-safe usage listed as an explicit assumption |
-| We want an integration test | There is no external system to integrate with; the multi-threaded test is a concurrency test | Tests named honestly: unit, acceptance (spec scenario), concurrency |
+| The task is mainly about multithreading | "Simultaneous matches" does not imply threads | Thread safety stated as an explicit assumption |
+| We want an integration test | There is no external system | Tests named unit, acceptance and concurrency |
 
 ## Review feedback on the generated code
 
 | Area | Generated first | My feedback | Result |
 |---|---|---|---|
-| Responsibilities | Validation, name handling and state in one class | Separate the logic early; a method that returns a new value should not be named like a validation | `TeamNames` (normalization), `MatchValidator` (rules), `MatchFactory` (creating a valid match), `ScoreboardState` (immutable state), `LiveScoreboard` (orchestration and concurrency) |
-| State structure | Matches and start sequences in two parallel maps | I suggested splitting the responsibilities of the state | `StartedMatch` (a match with its sequence, one map) and `SummaryOrder` (the ordering rule, tested directly) |
-| Packages | Everything in one package | Packages per kind of class; later, a tidier main package | First `model` and `exception` with the implementation next to the interface; once the implementation grew, an `internal` package hidden by `module-info.java` (D9) |
-| Test structure | Flat test methods | Use given / when / then | `// given / when / then` markers (`// when & then` for assertions on thrown exceptions) and `@Nested` groups per operation |
-| Comments | Javadoc on the public API | The code and tests should explain themselves | No comments; rule added to CLAUDE.md |
-| Naming | `Scoreboard.inMemory()`, `MatchId.random()`, a public `withMatch`, a private `put` | Names should say what happens, in domain terms | `Scoreboard.create()`, ids generated inside the scoreboard, `ScoreboardState.withStartedMatch` / `withUpdatedMatch` / `withoutMatch`, `Match.withScore` |
-| Defaults | `new Match(id, home, away, 0, 0)` | 0–0 is the default for a new match | Constructor without scores |
-| Playing-teams index | — | I asked whether a separate index for a fast check would be over-engineering | Yes for this scale; rejected with the condition for revisiting it (D4) |
+| Responsibilities | Validation, names and state in one class | Separate the logic early | `MatchFactory`, `MatchValidator`, `TeamNames`, `ScoreboardState`, `LiveScoreboard` |
+| Naming | A method returning a new value named `requireValid…` | Names must say what they do | `TeamNames.normalize` vs. `void` validators |
+| State structure | Two parallel maps (matches, start order) | Split the responsibilities of the state | `StartedMatch` and `SummaryOrder` |
+| State methods | `put`, then two identical aliases | Intent must be visible | `withStartedMatch`, `withUpdatedMatch`, `withoutMatch` |
+| Packages | One package | Order the classes | `model`, `exception`, `internal` hidden by `module-info.java` |
+| Tests | One growing test class, flat methods | Given/when/then, one class per feature | `// given / when / then`, `@Nested Validation` |
+| Comments | Javadoc | Code and tests should explain themselves | No comments |
+| Defaults | `new Match(id, home, away, 0, 0)` | 0–0 is the default | Constructor without scores |
 
 ## Prompt history
 
-Condensed English translation of my prompts, with a short note on the AI's response.
+**Approach and setup**
+> I want to use AI deliberately: first an outline, then step by step, preparing prompts for each step.
+> Prepare a Java skeleton for an empty repo, JDK 25. I'll commit myself.
 
-### 1. Approach
+The AI created a Maven skeleton with the wrapper and verified the build.
 
-> We're starting a small Java project. I want to use AI deliberately rather than generate code straight away:
-> first we prepare an outline, then go through it step by step, preparing good prompts for each step before implementing it.
+**Requirements analysis**
+> My first observation is concurrency. Identify the other open questions the requirements leave unspecified.
 
-*AI:* proposed the process — analysis → design decisions → plan → prompts per step → test-first implementation → documentation.
+> The lock vs read-write lock choice must be a trade-off depending on what dominates. A display board will have more readers.
 
-### 2. Project skeleton
+> MatchId — what are we choosing between? Same for the absolute score.
 
-> I already have an empty GitHub repo, JDK 25. Please prepare an initial commit with a Java skeleton. I'll commit myself, step by step.
-> Should I bother with branches? When working alone it doesn't make much sense, I think.
+> What about trading symbols like `POLMEX`? Maybe the event time solves out-of-order updates?
 
-*AI:* created a Maven skeleton (JUnit, AssertJ, enforcer, Maven Wrapper, `.gitattributes`, `.editorconfig`) and verified the build.
-On branches: suggested short-lived branches per stage merged through PRs, as cheap evidence of a reviewed workflow.
+> UUID is fine, absolute score obviously, and idempotency must be described.
 
-### 3. Requirements analysis
+The AI compared options for each question; the decisions and their origin are in the requirements analysis.
 
-> *(pasted the task description)*
-> My first observation is concurrency — many threads may update scores at the same time. Go through the requirements
-> and identify the other open questions and edge cases they leave unspecified. Then think about how to structure the work
-> so that each step can be prompted with the right context. We'll want unit tests and some integration test.
-> I think we should start with the interface and the domain model.
+**Conventions and plan** (written by me in English)
+> Write a short CLAUDE.md: a simple Java 25 library, in memory, no frameworks; the requirements analysis is the main
+> reference — ask me if something is missing; records for values, package-private implementation, exceptions from D6;
+> tests first, green build after every commit. Then an implementation plan in small steps, one step one commit.
 
-*AI:* identified the open questions (tie-break determinism, score semantics, identity, validation, encapsulation, concurrency, scope),
-suggested writing down decisions before the interface since the interface follows from them, and refined the testing terminology.
+**Steps 1–2: starting a match**
+> Implement step by step; I'll tell you what I don't like.
 
-### 4. Locking trade-off
+> For tests, introduce given/when/then. Take edge cases and input validation into account.
 
-> The lock vs read-write lock choice has to be written up as a trade-off, mentioning that the right one depends on what dominates.
-> I assume that since it's a display board, there will be more readers. What do you think?
+> Introduce packages. Dedicated helper classes? If a method returns a new value, name it after that operation.
+> It's worth separating the logic now.
 
-*AI:* agreed with the assumption but argued that a read-write lock does not pay off for very short read sections;
-proposed copy-on-write with a pre-sorted summary and a trade-off table.
+> Remember we want this to work with multiple threads. Is passing the map around good practice?
 
-### 5. Identity and score semantics
+> Keep as little code as possible in the critical section — only the state checks?
 
-> MatchId — what is the trade-off and what are we choosing between? Same for the absolute score.
+The AI wrote the concurrency tests first: on the old code 19 of 20 runs failed. After the change to an immutable
+state under one lock, all passed.
 
-*AI:* compared team pair / opaque id / mutable handle, and absolute score / increments / both.
+**Review checkpoint**
+> Review the documents and log entries for accuracy. In parallel, run a separate code review.
 
-### 6. Alternatives
+The documentation review found that the log claimed tests were reviewed before implementation in every step, which
+was not true for steps 1–2; it was corrected. The code review found records accepting `null`, a mutable collection
+in the state constructor and a compiler warning; all fixed test-first.
 
-> 1. What about symbols like in trading? `POLMEX` or `GERSWE`.
-> 2. Maybe the event time would solve it?
+**Steps 3–5: update, finish, ordering**
+> We have no control over stale events: an old message arriving late cannot be detected in this version.
 
-*AI:* the ticker is a natural key with the team-pair drawbacks — good for display, weak as identity.
-Event time rejects stale messages while still allowing corrections; a source version is more robust than a timestamp;
-since the extra feature must be an operation, a versioned update fits as a separate method.
+The AI confirmed this as the known limitation of D2, to be closed by the additional feature.
 
-### 7. Decisions
+> Is this too expensive on every write? — Let's record it as a trade-off, with a tree as the alternative structure.
 
-> UUID is fine, absolute score obviously, and idempotency must be described. Update with a version sounds great.
+> The test class keeps growing — split it into classes per feature.
 
-### 8. Traceability of decisions
+**Step 6: concurrency across all operations**
 
-> Does this document show how the decisions were reached?
-
-*AI:* it presented only the outcomes; suggested recording the origin of the key decisions and marking
-the performance reasoning as not benchmarked.
-
-### 9. Commit granularity
-
-> Separate commits for tests are too much. Feature branches, yes, but not that.
-
-*AI:* agreed — a tests-only commit leaves a red build and breaks `git bisect`. Workflow changed to one commit per
-behaviour with tests and implementation together.
-
-### 10. Conventions and plan
-
-Original prompt (written in English):
-
-> Write a short CLAUDE.md for this repo. It should say:
-> - this is a simple Java 25 library, in memory, with no frameworks
-> - docs/requirements-analysis.md is the main reference; if something is missing there, ask me
-> - we use records for values, keep the implementation package-private, and use the exceptions from D6
-> - we write tests first (JUnit + AssertJ) and the build must pass after every commit
->
-> Then write docs/implementation-plan.md with small steps. Start with the smallest thing:
-> start a match and see it in the summary. End with concurrency, the extra feature and the docs.
-> For each step, write what it does, which tests check it, and when it is done.
-> One step one commit.
-
-*AI:* wrote both files; added a short "boundaries" section (no new dependencies, no API beyond the decisions,
-no commits by the AI) and a rule not to assert summary order before the ordering step.
-
-### 11. Step 1 — start a match
-
-> Implement it step by step; I'll tell you what I don't like. For example, I don't like `inMemory`.
-
-*AI:* renamed the factory to `Scoreboard.create()` and the implementation to `LiveScoreboard`.
-Wrote the tests first and confirmed they failed (the API did not exist yet), then the minimal implementation.
-Left `Match.totalScore()` out until the ordering step, where it is first used, and updated the plan accordingly.
-
-> I don't like `random`, it should be something like `generateId`.
-
-> We don't need comments; the code should explain itself together with the tests.
-
-*AI:* renamed the id factory, removed all Javadoc and the placeholder `package-info.java`, and added the no-comments rule to CLAUDE.md.
-
-### 12. Step 2 — validating a new match
-
-> Let's go on. For tests, introduce given / when / then. Continue with the implementation and take edge cases
-> and input validation into account.
-
-*AI:* pointed out the conflict with the no-comments rule and chose `// given / when / then` markers as the only
-allowed comments (structure, not explanation), recorded in CLAUDE.md. Grouped tests with `@Nested` per operation.
-Wrote the validation tests first and ran them against the existing code (23 of 28 failing), then implemented.
-Edge cases covered by tests: blank names including tabs and newlines, the same team differing only in case or
-whitespace, a team already playing on either side, a rematch with swapped sides, and a rejected start leaving the
-scoreboard unchanged. Edge cases deliberately left out (internal whitespace, Unicode case folding, name length)
-were documented in D5.
-
-### 13. Step 2 — reviewing the structure
-
-My review comments on the generated code, in order:
-
-> It's worth introducing packages for different kinds of classes.
-
-> Dedicated helper classes? For example for `requireValidTeamName`.
-
-> Maybe two dedicated methods instead of passing those strings, and then they can become constants in the helper.
-
-> Maybe move all of this validation into a smaller method? — Do we really need the `Teams` object here?
-> Wouldn't a plain `void validate` be better?
-
-> If `requireValidAwayTeam` changes the value or creates a new one, maybe it should be named after that operation —
-> some kind of normalization. At this point it's worth thinking about separating the logic: we only have the first
-> features and there is already quite a lot of code here.
-
-*AI:* for packages, pointed out the conflict with D9 (moving the implementation to its own package would make it
-public) and offered two options; I chose `model` + `exception`. The validation code then went through a few
-iterations driven by these comments and ended with transformation separated from checking: `TeamNames.normalize`
-returns the stripped name, `MatchValidator` holds the rules as `void` checks, and `LiveScoreboard` only orchestrates.
-Behaviour did not change, so the existing tests guarded every refactoring without modification.
-
-### 14. Step 2 — concurrency
-
-> Let's remember that we want this to work with multiple threads. And is passing the map around like this good practice?
-> Let's take it into account right away.
-
-*AI:* agreed on both. Passing `matches.values()` exposed a live, mutable view of the internal state to another class.
-The "one match per team" rule is a check-then-act across several entries, so a concurrent map alone would not protect it.
-Pulled the copy-on-write design (D4) forward from step 6: an immutable `ScoreboardState`, writes validated and applied
-under one lock, reads of a `volatile` snapshot; the validator now receives the immutable state.
-Wrote concurrency tests first and ran them against the old code: 19 of 20 repetitions failed with
-`ConcurrentModificationException`, and 18 of 20 let the same team start several matches. After the change all tests
-passed in repeated runs. The plan was updated: step 6 now only verifies all operations together under concurrent load.
-
-> We want as little code as possible in the critical section. Do we really want all the validation there, or only
-> the state checks? And how does the current solution compare to what we planned for the concurrency option?
-
-*AI:* only the state checks belong there. Split the validator into `validateTeams` (stateless, before the lock) and
-`validateTeamsNotPlaying` (inside the lock), and moved id generation — `UUID.randomUUID()` uses `SecureRandom` — and
-creating the `Match` out of the lock as well. Compared the result with D4: it matches the plan (single writer lock,
-immutable state published through `volatile`, lock-free O(1) reads, copy cost O(n) per write); the only deviations
-were the timing (introduced in step 2 instead of step 6) and the oversized critical section, now fixed.
-Also documented a lock-free `AtomicReference.updateAndGet` variant as a considered alternative.
-
-> I don't like the name `withMatch`. And would adding a separate map of teams currently playing, for a fast check,
-> be over-engineering?
-
-*AI:* renamed it to `addMatch`, consistent with the upcoming update and remove operations. On the index: yes, over-engineering
-for now — with a handful of simultaneous matches the scan costs nothing measurable, while the index would be a second source
-of truth to keep in sync and to copy on every write. Recorded in D4 together with the condition for revisiting it.
-
-> `Match` — we don't need `0, 0` in the constructor, that's the default anyway.
-
-*AI:* added a constructor without scores that delegates to the canonical one with 0–0. Tests keep the full form,
-since there 0–0 is the expected value being asserted.
-
-### 15. Review checkpoint
-
-> Review the documents and log entries and correct anything that is inaccurate. In parallel, run a separate code review —
-> is there anything to improve at this stage?
-
-*AI:* found that the documents described tests being reviewed before implementation, which did not match how the steps
-were actually done (tests first and run red, then implementation, then my review); corrected AI.md and CLAUDE.md.
-Also split this file's change log into design decisions and code review feedback, and made the requirements analysis
-consistent with which decisions carry an origin note.
-
-The separate code review found no defects in the concurrency core and a few real gaps: records accepting `null` and
-negative values, `ScoreboardState` accepting mutable collections through its canonical constructor, a `serialVersionUID`
-compiler warning (missed earlier because only incremental builds had been checked), a D9 statement that did not match
-the code, and some missing edge-case tests. The documentation gaps were corrected right away.
-
-> Change `when / then` to `when & then`. And make the fixes you found right away.
-
-*AI:* renamed the markers and fixed all findings, test-first where behaviour changed (8 new tests failing before the fix):
-- `Match` and `MatchId` validate `null`s and negative scores in compact constructors;
-- `ScoreboardState` became a final class that copies its collections itself, so no caller can hand it a mutable map;
-- `null` and blank checks moved to the validator, on the raw input before normalization, so the messages name the side;
-- inside the lock the state is read once into a local, so the check and the update visibly use the same snapshot;
-- concurrency tests now compare the returned ids with the ids in the summary instead of only counting;
-- missing edge-case tests added (spelling kept as provided, internal whitespace, rejection by the away team);
-- `serialVersionUID` added, `-Werror` enabled, default Maven plugin versions pinned.
-
-> Maybe return a `Match` from all of that and take the fields from that object afterwards?
-
-*AI:* extracted the input checks, normalization and creation into a private `newMatch` that returns a valid `Match`;
-`startMatch` now reads as "create a valid match, then check the state and store it under the lock", and the state
-check takes the `Match` instead of two strings.
-
-> And then it can probably be moved out of here, right?
-
-*AI:* yes — creating a match does not depend on the scoreboard state, so it moved to a package-private `MatchFactory`.
-`LiveScoreboard` is left with orchestration and concurrency only.
-
-### 16. Step 3 — update the score
-
-> Let's go on.
-
-*AI:* added the `updateScore` signature, `MatchNotFoundException` and a stub throwing `UnsupportedOperationException`,
-so the new tests compiled and failed (29 red: 9 unit tests and a concurrency test repeated 20 times), then stopped
-for review. Tests cover the summary showing the new score, idempotency (D2), lowering the score as a correction,
-isolation between matches, `null` id, negative scores, an unknown match, a rejected update leaving the state unchanged,
-and concurrent updates of different matches not being lost — moved forward from step 6, as the copy-on-write pattern
-already exists.
-
-> I accept, implement it.
-
-*AI:* stateless checks (`null` id, negative scores) run in `MatchValidator` before the lock; inside the lock a single call,
-`ScoreboardState.updateScore`, looks the match up, rejects an unknown id and returns the new state. All 107 tests passed
-in repeated clean runs.
-
-> The worst part is that we have no clear control over the events: if an old, stale event arrives — lost and delivered
-> out of order — this version has no way to detect it.
-
-*AI:* confirmed this is the known limitation of absolute updates recorded in D2: duplicates and missed updates are
-handled (idempotent, self-healing), but out-of-order delivery is not. It is deliberately left out of the core operation
-and addressed by the additional feature, the versioned update (D8, step 7), which must be a distinct commit anyway.
-
-> Do a thorough review of `ScoreboardState`. I don't like `put`, not even the name.
-
-*AI:* agreed that `put` was Map vocabulary hiding intent — adding and replacing a match went through the same call.
-The review found two more issues: the state built a `Match` from its fields (so it would have to change whenever the record
-gains a field, e.g. in steps 5 and 7), and it threw `MatchNotFoundException`, a rule decision that does not belong to
-the state. Refactored: the state answers questions (`findMatch`, `isPlaying`) and returns new versions of itself
-(`addMatch`, `replaceMatch`); the not-found rule moved to `LiveScoreboard`; `Match.withScore` builds the updated match.
-
-> `withScore` is fine.
-
-> For the private helper, `withMatch` fits now.
-
-*AI:* renamed it — inside the state, "this state with the match included" is exactly what it does.
-
-> Once more — review the whole thing, and do the tests cover everything in this version?
-
-*AI:* measured coverage with JaCoCo run once from the command line (no pom change): 100% lines and branches.
-Pointed out that coverage only shows every line ran, not that every behaviour is checked, and listed the gaps:
-no test that a summary taken earlier is unaffected by later writes (the D4 snapshot guarantee), no state check after
-an update of an unknown match, unchecked messages of the domain exceptions, and an undefined validation order.
-Also flagged the non-negative rule existing in both the validator and the record, a possible `int` overflow in the
-future `totalScore()`, and inconsistent continuation indentation.
-
-> Yes, add everything.
-
-*AI:* added the tests (they pass immediately — they guard existing behaviour against regressions), documented the
-duplicated rule as deliberate in D6, noted the overflow decision in plan step 5, unified continuation indentation and
-recorded it in `.editorconfig`.
-
-> What about the exception thrown inside the critical section?
-
-*AI:* it is safe — an exception leaving a `synchronized` block always releases the monitor, and with copy-on-write the state
-is replaced only as the last statement, so nothing is half-changed (already covered by a test). The only cost is creating
-the exception under the lock, on the error path only. Showed how to move the throw outside the lock and recommended
-against it for readability. Recorded the reasoning in D4.
-
-> Can't we wrap this more nicely? It's quite a long sequence; splitting it into smaller steps might be more readable.
-
-*AI:* extracted "find the match in progress or throw" into a private `matchInProgress`, named after the domain rather
-than the mechanics. The block under the lock now mirrors `startMatch` — read the state, one domain step, replace the
-state — and the helper will be reused by `finishMatch` in step 4.
-
-> Is reading `state` into `current` inside the lock needed? Wouldn't it be better to work on `state` directly?
-
-*AI:* both are correct — writers are serialized by the lock. Recommended keeping the local: it makes explicit that the
-check and the update use the same snapshot, and it is the shape a lock-free variant would need. Kept.
-
-> That `" must not be null"` could be a constant.
-
-*AI:* extracted the message suffixes (`null`, blank, negative) into private constants in `MatchValidator` and in `Match`;
-the record lives in another package, so a shared public messages class would not be worth it for three strings.
-
-> `addMatch` and `replaceMatch` both just call `withMatch` — does that make sense?
-
-*AI:* no — they were aliases whose names promised guarantees the code did not enforce (no overwrite on add, existence on
-replace). Enforcing them would add unreachable branches, since the callers already guarantee both. Replaced them with one
-`withMatch(Match)` ("this state with that match"), which will pair naturally with `withoutMatch` for finishing a match.
-
-### 17. Step 4 — finish a match
-
-> Merged, let's go with the next step.
-
-*AI:* added the `finishMatch` signature with a stub and wrote the tests first (28 red: 8 unit tests and a concurrency test
-repeated 20 times), then stopped for review. Tests cover removing the match, keeping the others with their scores,
-a rematch after finishing (the counterpart of the step 2 test that rejects it while the first match is in progress),
-`null` id, an unknown match, finishing twice and updating a finished match (both `MatchNotFoundException`, D7),
-a rejected finish leaving the state unchanged, and many threads finishing the same match with exactly one succeeding.
-
-> I accept the implementation. The test class keeps growing — I suggest splitting it into dedicated classes per feature.
-
-*AI:* implemented first (`MatchValidator.validateMatchId`, reused by the score update; `ScoreboardState.withoutMatch`;
-the existing `matchInProgress` helper reused under the lock), then split the tests into `StartMatchTest`,
-`UpdateScoreTest`, `FinishMatchTest` and `SummaryTest`, each with a nested `Validation` class. The split was done by
-moving whole blocks with a script; a first run dropped one line from two files, which the check caught — the list of
-executed test methods before and after the split was compared and is identical (139 tests).
-
-> We have no changelog and no versioning yet — that's a gap in the process, worth adding now.
-
-*AI:* agreed to add a changelog, but argued against back-dating versions: nothing has been released, so retroactive
-versions would be fiction, and merged history should not be rewritten. Added `CHANGELOG.md` (Keep a Changelog) with
-all changes so far under `[Unreleased]`, a release plan following SemVer — 1.0.0 when the four required operations are
-complete, 1.1.0 for the additional operation as a backward-compatible minor addition — release steps in the plan, and a
-CLAUDE.md rule that every user-visible change updates the changelog in the same commit.
-
-> Is the order of the changelog entries right? I don't think so — the project initialization is at the top.
-
-*AI:* agreed — entries now go newest first, consistent with the reverse-chronological order of versions; internal
-changes (Maven Wrapper, compiler flags) were removed, as the changelog is for library users; only the Java 25
-requirement stayed. Rule added to CLAUDE.md.
-
-### 18. Step 5 — ordering the summary
-
-> Let's go with the next part of the implementation.
-
-*AI:* added a `Match.totalScore()` stub and wrote the tests first: total score and its overflow, ordering by total,
-the tie-break by most recent start, ten matches started in a loop (the D3 trap — with a wall clock they would tie),
-order following updates, an update not refreshing the start order, finishing keeping the order of the others, and the
-example from the specification as an acceptance test through the public API only. 7 of 9 failed; 2 passed by chance
-because of the `HashMap` iteration order — reported as such. Proposed `long` for the total and the start counter inside
-`ScoreboardState` (the public record must not expose it), then stopped for review.
-
-> I fully agree with the `long` and the counter in the state. Let's implement.
-
-*AI:* the state assigns a start sequence only when a match is added for the first time and sorts the summary once per
-write (total descending, then sequence descending). All 148 tests passed in repeated clean runs, including the
-specification example. Changelog, D3 and the CLAUDE.md testing rule updated.
-
-> Why does the sequence change on an update?
-
-*AI:* it does not — that branch ran only for a new match, and a test guards it. But the question showed the code did
-not express its intent: the single `withMatch` from step 3 had to guess whether a match was new. With start sequences,
-adding and replacing genuinely differ, so the earlier argument against two methods (identical aliases) no longer held.
-Split into `withStartedMatch` (assigns the next sequence) and `withUpdatedMatch` (keeps it), without the guessing branch.
-
-> I'm thinking about splitting the responsibilities of `ScoreboardState` — the codebase is growing. Does it make sense?
-
-*AI:* yes, though not because of its size (about 75 lines) but because of its shape: two parallel maps (matches and
-start sequences) had to be kept in sync by hand in every operation — the same second-source-of-truth risk rejected
-earlier for the playing-teams index. Proposed two extractions and advised against more (a separate sequence generator
-or team registry would be ceremony): a package-private `StartedMatch` record keeping a match with its sequence in one
-map, and a `SummaryOrder` comparator giving the D3 rule one named, directly testable place.
-
-> Both make sense.
-
-*AI:* wrote `SummaryOrderTest` first (failing to compile), extracted both classes and reduced `ScoreboardState` to one
-map. Behaviour did not change: all 148 existing tests guarded the refactoring, plus 3 new ones for the ordering rule.
-
-> The main package has become messy — the classes can be organised properly.
-
-*AI:* pointed out the D9 trade-off again: package-private classes cannot see each other across packages, so every split
-forces classes to become public. Proposed a single `internal` package for the whole implementation (only
-`LiveScoreboard` public, the rest package-private) and, now that there are seven internal classes, the `module-info.java`
-rejected earlier for five — exporting only the API packages. Verified the build passed unchanged and that the jar
-descriptor exports three packages and only contains `internal`. Updated D9 with the history of the decision.
-
-> Isn't sorting in the state constructor too expensive on every write?
-
-*AI:* not under our assumptions: it is the D4 trade-off of paying on the rare writes so that the frequent reads are
-O(1), with n in the tens at most. Walked through the alternatives (sort on read, lazy sort, a tree, a persistent tree)
-and when the current choice would stop paying off, and noted that this is reasoning, not a measurement.
-
-> Let's record that as a trade-off — the tree as an alternative structure.
-
-*AI:* added a table to D4 comparing the sorted list with sorting on read, lazy sorting, an ordered tree and a
-persistent tree, including why a mutable tree does not combine with lock-free readers and why an update would be a
-remove plus re-insert.
-
-### 19. Step 6 — concurrency across all operations
-
-> It's fine, let's go on.
-
-*AI:* added two concurrency tests: mixed starts, updates and finishes ending in a complete, correctly ordered state,
-and readers checking every summary they see (ordered, no team twice) while writers play matches. Since the
-implementation existed since step 2, the tests passed at once, so the AI ran a mutation check: with all `synchronized`
-blocks removed, every one of the six concurrency tests failed (98 of 105 runs); the code was then restored.
-Reported honestly that the reader test failed because writers lost operations, not because readers saw inconsistent
-data — consistent reads come from immutable snapshots even without the lock.
-
+The new tests passed at once, so the AI removed all locks on purpose: every concurrency test failed, then the code
+was restored.
 > That's exactly what I was going to propose.
 
-*AI:* recorded the mutation check as a rule in CLAUDE.md for tests that pass as soon as they are written.
+**Step 7: the additional feature**
+> Let's think together about the direction of the feature.
 
-### 20. Step 7 — choosing the additional feature
+> I propose a feature solving the problem discovered during implementation, as an additional method — but
+> `updateScoreIfNewer` doesn't fit. I'd go with an overload. Feeds number messages with a sequence id.
 
-> Let's think together about which direction to take the feature. What do you propose?
+The AI noted that the existing `updateScore` must keep `void` after 1.0.0 (binary compatibility). Mutation check:
+with the lock removed, the concurrency test failed in 35 of 200 repetitions and in every run of 20; with correct code,
+0 of 200.
 
-*AI:* compared three candidates — a versioned score update, a change subscription (`subscribe(listener)`) and a lookup
-of the match in progress by team — and rejected others (history of finished matches, top-n summary, pause status) as
-conflicting with D7 or adding nothing. Recommended the versioned update for its continuity with the design: it closes
-the one weakness of absolute updates named in D2. Pointed out that a subscription, while technically richer, raises
-hard questions (callbacks under or after the lock, event ordering, slow or failing listeners) and risks over-engineering
-a simple library.
+**Final review**
+> Review the package structure, readability, edge cases and SOLID, and make the documents concise.
 
-> I propose a feature that solves the problem discovered during the implementation — out-of-order score messages —
-> with an additional method implementing it. But the name `updateScoreIfNewer` doesn't sit right with me.
+Result: clearer names in the state, two edge-case tests (sequence number 0, the same number with a different score),
+and the documentation cut by more than half.
 
-*AI:* proposed `applyScoreUpdate`, `updateVersionedScore`, an `updateScore` overload and a parameter object, and
-recommended `applyScoreUpdate`.
+## Artifacts
 
-> I'd go with the overload.
-
-*AI:* agreed — the overload shows it is the same operation with ordering control. Pointed out that only the new
-overload can return `boolean`: changing the existing `updateScore` from `void` after 1.0.0 would break binary
-compatibility and require 2.0.0 under SemVer. Recorded the D8 decisions (stale and equal versions return `false`, the
-unversioned update acts as a manual correction that keeps the version, versions must be non-negative) as proposals
-to be confirmed together with the tests.
-
-### 21. Step 7 — implementing the feature
-
-> I accept, implement it.
-
-*AI:* the internal `StartedMatch` keeps the last applied number; the check and the state swap happen under the lock.
-All 208 tests passed in repeated runs. Mutation check: with the number check disabled, three unit tests and the
-concurrency test failed; with the lock removed from the new method, the concurrency test failed in 1 of 20
-repetitions. Measured over 200 repetitions, it failed in 35 (17.5%) and in every one of 10 runs of 20, while the
-correct code failed in none of 200 — so each build would catch the missing lock, and the test was left unchanged.
-
-> Feeds often number consecutive messages with a sequence id — maybe that fits the domain better.
-
-*AI:* agreed that "version" suggested versioning the score rather than ordering messages, and proposed
-`sequenceNumber` rather than `sequenceId`, since the value is compared, not just used to tell messages apart.
-Renamed the parameter, the validation, the internal fields and the tests, and rewrote D8 and plan step 7 in those terms.
-To keep "sequence" reserved for feed messages, also proposed renaming the internal `startSequence` to `startOrder`.
-
-> `sequenceNumber` is great, but `startOrder` doesn't sit right with me.
-
-*AI:* offered `startIndex`, `kickOffOrder` and `startOrdinal`, recommending `startIndex`.
-
-> `startIndex`.
-
-*AI:* renamed the field and the counter (`nextStartIndex`) and updated D3, the plan and CLAUDE.md.
-
-> Couldn't we lock the specific resource being changed instead of the whole collection? Maybe we should go in the
-> direction of that optimisation.
-
-*AI:* explained why fine-grained locking would not help here: every write changes the global sorted summary that must
-be published as one snapshot, starting a match spans two teams and all matches (several locks in a fixed order), and
-writers rarely contend anyway. Named the conditions under which it would pay off.
-
-> Add it to the trade-offs.
-
-*AI:* added fine-grained locking to the D4 table and notes as a considered and rejected alternative.
-
-## Artifacts that guided the implementation
-
-- [docs/requirements-analysis.md](docs/requirements-analysis.md) — open questions, options, decisions and their origin.
-- [CLAUDE.md](CLAUDE.md) — working context and boundaries for the AI.
-- [docs/implementation-plan.md](docs/implementation-plan.md) — the steps, their tests and definitions of done.
+- [docs/requirements-analysis.md](docs/requirements-analysis.md) — decisions, options and trade-offs.
+- [docs/implementation-plan.md](docs/implementation-plan.md) — steps, tests and definitions of done.
+- [CLAUDE.md](CLAUDE.md) — conventions and boundaries for the AI.
 - [CHANGELOG.md](CHANGELOG.md) — user-visible changes and the release plan.

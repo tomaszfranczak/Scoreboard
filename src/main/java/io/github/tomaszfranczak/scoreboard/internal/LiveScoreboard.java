@@ -47,7 +47,7 @@ public final class LiveScoreboard implements Scoreboard {
         synchronized (writeLock) {
             ScoreboardState current = state;
             Match match = matchInProgress(matchId, current);
-            if (!current.isNewer(matchId, sequenceNumber)) {
+            if (!current.isNewerSequenceNumber(matchId, sequenceNumber)) {
                 return false;
             }
             state = current.withUpdatedMatch(match.withScore(homeScore, awayScore), sequenceNumber);

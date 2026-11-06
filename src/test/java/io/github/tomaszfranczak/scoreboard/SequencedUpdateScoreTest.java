@@ -57,6 +57,33 @@ class SequencedUpdateScoreTest {
     }
 
     @Test
+    void zeroIsAValidFirstSequenceNumber() {
+        // given
+        MatchId id = scoreboard.startMatch("Mexico", "Canada");
+
+        // when
+        boolean applied = scoreboard.updateScore(id, 1, 0, 0);
+
+        // then
+        assertThat(applied).isTrue();
+        assertThat(scoreboard.getSummary()).containsExactly(new Match(id, "Mexico", "Canada", 1, 0));
+    }
+
+    @Test
+    void sameSequenceNumberWithADifferentScoreIsIgnored() {
+        // given
+        MatchId id = scoreboard.startMatch("Mexico", "Canada");
+        scoreboard.updateScore(id, 1, 0, 3);
+
+        // when
+        boolean applied = scoreboard.updateScore(id, 2, 0, 3);
+
+        // then
+        assertThat(applied).isFalse();
+        assertThat(scoreboard.getSummary()).containsExactly(new Match(id, "Mexico", "Canada", 1, 0));
+    }
+
+    @Test
     void sameSequenceNumberIsIgnoredAsADuplicate() {
         // given
         MatchId id = scoreboard.startMatch("Mexico", "Canada");
