@@ -12,6 +12,11 @@ final class LiveScoreboard implements Scoreboard {
     private volatile ScoreboardState state = ScoreboardState.EMPTY;
 
     @Override
+    public List<Match> getSummary() {
+        return state.summary();
+    }
+
+    @Override
     public MatchId startMatch(String homeTeam, String awayTeam) {
         Match match = MatchFactory.create(homeTeam, awayTeam);
 
@@ -35,8 +40,14 @@ final class LiveScoreboard implements Scoreboard {
     }
 
     @Override
-    public List<Match> getSummary() {
-        return state.summary();
+    public void finishMatch(MatchId matchId) {
+        MatchValidator.validateMatchId(matchId);
+
+        synchronized (writeLock) {
+            ScoreboardState current = state;
+            Match match = matchInProgress(matchId, current);
+            state = current.withoutMatch(match.id());
+        }
     }
 
     private static Match matchInProgress(MatchId matchId, ScoreboardState state) {

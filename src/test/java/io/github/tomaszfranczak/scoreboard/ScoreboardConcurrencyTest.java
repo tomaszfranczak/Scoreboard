@@ -1,5 +1,6 @@
 package io.github.tomaszfranczak.scoreboard;
 
+import io.github.tomaszfranczak.scoreboard.exception.MatchNotFoundException;
 import io.github.tomaszfranczak.scoreboard.exception.TeamAlreadyPlayingException;
 import io.github.tomaszfranczak.scoreboard.model.Match;
 import io.github.tomaszfranczak.scoreboard.model.MatchId;
@@ -66,6 +67,26 @@ class ScoreboardConcurrencyTest {
                 .mapToObj(i -> new Match(ids.get(i), "Home " + i, "Away " + i, i, i + 1))
                 .toList();
         assertThat(scoreboard.getSummary()).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    @RepeatedTest(20)
+    void concurrentFinishesOfTheSameMatchLetOnlyOneSucceed() throws Exception {
+        // given
+        MatchId id = scoreboard.startMatch("Mexico", "Canada");
+
+        // when
+        List<Boolean> finished = runConcurrently(i -> () -> {
+            try {
+                scoreboard.finishMatch(id);
+                return true;
+            } catch (MatchNotFoundException e) {
+                return false;
+            }
+        });
+
+        // then
+        assertThat(finished).containsOnlyOnce(true);
+        assertThat(scoreboard.getSummary()).isEmpty();
     }
 
     private List<MatchId> idsInSummary() {

@@ -15,5 +15,7 @@ public interface Scoreboard {
 
     void updateScore(MatchId matchId, int homeScore, int awayScore);
 
+    void finishMatch(MatchId matchId);
+
     List<Match> getSummary();
 }

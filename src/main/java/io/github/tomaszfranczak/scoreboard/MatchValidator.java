@@ -21,8 +21,12 @@ final class MatchValidator {
     private MatchValidator() {
     }
 
-    static void validateScoreUpdate(MatchId matchId, int homeScore, int awayScore) {
+    static void validateMatchId(MatchId matchId) {
         Objects.requireNonNull(matchId, MATCH_ID + MUST_NOT_BE_NULL);
+    }
+
+    static void validateScoreUpdate(MatchId matchId, int homeScore, int awayScore) {
+        validateMatchId(matchId);
         requireNonNegative(homeScore, HOME_SCORE);
         requireNonNegative(awayScore, AWAY_SCORE);
     }

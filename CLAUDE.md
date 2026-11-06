@@ -44,7 +44,8 @@ no runtime dependencies.
 - JUnit 6 + AssertJ. Test names describe the behaviour, e.g. `newMatchStartsWithZeroScore`.
 - Tests follow given / when / then, marked with `// given`, `// when`, `// then` (`// when & then` when the action
   is the assertion, e.g. `assertThatThrownBy`) — the only comments allowed.
-- Tests are grouped with `@Nested` classes per operation.
+- One test class per operation (`StartMatchTest`, `UpdateScoreTest`, `FinishMatchTest`, `SummaryTest`), with input
+  and state validation in a nested `Validation` class; concurrency tests live in `ScoreboardConcurrencyTest`.
 - Until ordering is implemented (plan step 5), do not assert the order of the summary.
 - Every commit keeps the build green: `./mvnw verify` (Windows: `mvnw.cmd verify`). Requires JDK 25.
   The compiler runs with `-Xlint:all -Werror`; check warnings with a **clean** build (`./mvnw clean verify`),

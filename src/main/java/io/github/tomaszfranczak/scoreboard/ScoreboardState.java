@@ -38,4 +38,10 @@ final class ScoreboardState {
         updated.put(match.id(), match);
         return new ScoreboardState(updated);
     }
+
+    ScoreboardState withoutMatch(MatchId matchId) {
+        Map<MatchId, Match> updated = new HashMap<>(matches);
+        updated.remove(matchId);
+        return new ScoreboardState(updated);
+    }
 }
