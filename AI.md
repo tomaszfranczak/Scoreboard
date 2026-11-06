@@ -50,6 +50,7 @@ English translation, condensed but faithful in content. All code, documentation 
 | Out-of-order feed updates | Documented as a known limitation | I suggested that the event time could solve it | Turned into the additional feature: versioned score update (D8) |
 | Idempotency | Mentioned as one advantage among others | I required it to be documented explicitly | A dedicated idempotency section in D2 |
 | Commit granularity | Separate commits for tests and implementation | I rejected it as excessive | One commit per behaviour with its tests; the build is green in every commit |
+| Changelog and versioning | Not part of the plan | I pointed out the missing changelog and versioning | `CHANGELOG.md` (Keep a Changelog) and a SemVer release plan: 1.0.0 for the required operations, 1.1.0 for the additional one; no back-dated versions |
 
 And the other way round, where the AI corrected my initial framing:
 
@@ -381,8 +382,23 @@ the existing `matchInProgress` helper reused under the lock), then split the tes
 moving whole blocks with a script; a first run dropped one line from two files, which the check caught — the list of
 executed test methods before and after the split was compared and is identical (139 tests).
 
+> We have no changelog and no versioning yet — that's a gap in the process, worth adding now.
+
+*AI:* agreed to add a changelog, but argued against back-dating versions: nothing has been released, so retroactive
+versions would be fiction, and merged history should not be rewritten. Added `CHANGELOG.md` (Keep a Changelog) with
+all changes so far under `[Unreleased]`, a release plan following SemVer — 1.0.0 when the four required operations are
+complete, 1.1.0 for the additional operation as a backward-compatible minor addition — release steps in the plan, and a
+CLAUDE.md rule that every user-visible change updates the changelog in the same commit.
+
+> Is the order of the changelog entries right? I don't think so — the project initialization is at the top.
+
+*AI:* agreed — entries now go newest first, consistent with the reverse-chronological order of versions; internal
+changes (Maven Wrapper, compiler flags) were removed, as the changelog is for library users; only the Java 25
+requirement stayed. Rule added to CLAUDE.md.
+
 ## Artifacts that guided the implementation
 
 - [docs/requirements-analysis.md](docs/requirements-analysis.md) — open questions, options, decisions and their origin.
 - [CLAUDE.md](CLAUDE.md) — working context and boundaries for the AI.
 - [docs/implementation-plan.md](docs/implementation-plan.md) — the steps, their tests and definitions of done.
+- [CHANGELOG.md](CHANGELOG.md) — user-visible changes and the release plan.

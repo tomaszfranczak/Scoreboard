@@ -118,6 +118,9 @@ This step verifies the operations together under concurrent load.
 
 **Done when:** all earlier tests still pass and the concurrency tests pass reliably.
 
+**Release 1.0.0** (separate commit after this step): set the version in `pom.xml` to `1.0.0`, move the `[Unreleased]`
+entries in `CHANGELOG.md` to `[1.0.0]`, tag `v1.0.0`; then set the next development version `1.1.0-SNAPSHOT`.
+
 ## Step 7 — Additional feature: versioned score update
 
 **What it does:** a separate operation that applies a score only if its version is newer than the last
@@ -133,6 +136,9 @@ unversioned updates interact, what an equal version means) and update the requir
 - validation as in step 3 (null id, unknown id, negative score)
 
 **Done when:** D8 has no open questions left, the tests pass, and the README has a section explaining the feature.
+
+**Release 1.1.0** (after the documentation step): same procedure as 1.0.0 — a new backward-compatible operation is a
+minor version.
 
 ## Step 8 — Documentation
 

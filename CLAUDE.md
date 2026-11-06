@@ -51,6 +51,13 @@ no runtime dependencies.
   The compiler runs with `-Xlint:all -Werror`; check warnings with a **clean** build (`./mvnw clean verify`),
   since incremental builds do not recompile unchanged classes.
 
+## Changelog and versioning
+
+- Every change visible to library users gets an entry under `[Unreleased]` in `CHANGELOG.md`, in the same commit.
+  Newest entries go on top; internal changes (build, tests, refactoring) are not listed.
+- Semantic Versioning; the version stays `-SNAPSHOT` between releases and is changed only in a release commit
+  (see the release plan in `CHANGELOG.md`).
+
 ## Boundaries
 
 - Do not add dependencies.
