@@ -25,8 +25,9 @@ no runtime dependencies.
     (normalization, stateless validation, ids, new objects) runs before the lock; inside `synchronized (writeLock)`
     only state-dependent checks and replacing the state; reads only read the `volatile` state
   - `MatchFactory` — builds a valid new `Match` from raw input (input checks, normalization, id); no state
-  - `ScoreboardState` — immutable state; copies its collections itself; changes return a new instance;
-    never pass mutable collections around
+  - `ScoreboardState` — immutable state; copies its collections itself; answers questions (`findMatch`, `isPlaying`)
+    and returns new versions of itself (`withMatch`; `withoutMatch` in step 4); takes whole `Match` objects, never builds them
+    from fields, and never decides what is an error; never pass mutable collections around
   - `MatchValidator` — business rules; `void` methods that throw; input checks (`null`, blank) run on the raw input
     before normalization, so messages can name the parameter
   - `TeamNames` — normalization and comparison of team names

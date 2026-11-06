@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.IntFunction;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,7 +28,7 @@ class ScoreboardConcurrencyTest {
     void concurrentStartsWithDifferentTeamsAreAllRecorded() throws Exception {
         // when
         List<Optional<MatchId>> started = startConcurrently(i ->
-            () -> scoreboard.startMatch("Home " + i, "Away " + i));
+                () -> scoreboard.startMatch("Home " + i, "Away " + i));
 
         // then
         assertThat(started).allMatch(Optional::isPresent);
@@ -39,7 +40,7 @@ class ScoreboardConcurrencyTest {
     void concurrentStartsWithTheSameTeamLetOnlyOneMatchStart() throws Exception {
         // when
         List<Optional<MatchId>> started = startConcurrently(i ->
-            () -> scoreboard.startMatch("Mexico", "Opponent " + i));
+                () -> scoreboard.startMatch("Mexico", "Opponent " + i));
 
         // then
         List<MatchId> winners = started.stream().flatMap(Optional::stream).toList();
@@ -47,29 +48,55 @@ class ScoreboardConcurrencyTest {
         assertThat(idsInSummary()).containsExactlyElementsOf(winners);
     }
 
+    @RepeatedTest(20)
+    void concurrentUpdatesOfDifferentMatchesAreNotLost() throws Exception {
+        // given
+        List<MatchId> ids = IntStream.range(0, THREADS)
+                .mapToObj(i -> scoreboard.startMatch("Home " + i, "Away " + i))
+                .toList();
+
+        // when
+        runConcurrently(i -> () -> {
+            scoreboard.updateScore(ids.get(i), i, i + 1);
+            return null;
+        });
+
+        // then
+        List<Match> expected = IntStream.range(0, THREADS)
+                .mapToObj(i -> new Match(ids.get(i), "Home " + i, "Away " + i, i, i + 1))
+                .toList();
+        assertThat(scoreboard.getSummary()).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
     private List<MatchId> idsInSummary() {
         return scoreboard.getSummary().stream().map(Match::id).toList();
     }
 
-    private List<Optional<MatchId>> startConcurrently(IntFunction<Callable<MatchId>> task) throws Exception {
+    private List<Optional<MatchId>> startConcurrently(IntFunction<Callable<MatchId>> start) throws Exception {
+        return runConcurrently(i -> () -> {
+            try {
+                return Optional.of(start.apply(i).call());
+            } catch (TeamAlreadyPlayingException e) {
+                return Optional.empty();
+            }
+        });
+    }
+
+    private <T> List<T> runConcurrently(IntFunction<Callable<T>> task) throws Exception {
         CountDownLatch startSignal = new CountDownLatch(1);
         try (ExecutorService executor = Executors.newFixedThreadPool(THREADS)) {
-            List<Future<Optional<MatchId>>> futures = new ArrayList<>();
+            List<Future<T>> futures = new ArrayList<>();
             for (int i = 0; i < THREADS; i++) {
-                Callable<MatchId> action = task.apply(i);
+                Callable<T> action = task.apply(i);
                 futures.add(executor.submit(() -> {
                     startSignal.await();
-                    try {
-                        return Optional.of(action.call());
-                    } catch (TeamAlreadyPlayingException e) {
-                        return Optional.empty();
-                    }
+                    return action.call();
                 }));
             }
             startSignal.countDown();
 
-            List<Optional<MatchId>> results = new ArrayList<>();
-            for (Future<Optional<MatchId>> future : futures) {
+            List<T> results = new ArrayList<>();
+            for (Future<T> future : futures) {
                 results.add(future.get());
             }
             return results;

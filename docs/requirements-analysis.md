@@ -108,6 +108,11 @@ Implementation notes:
   invariant at risk ("a team plays in one match at a time") spans several entries. A lock-free variant would need a
   second map of team reservations with rollback, and still would not give readers a consistent snapshot.
 - The validator receives the immutable state, never a live view of a mutable collection.
+- Domain exceptions (`TeamAlreadyPlayingException`, `MatchNotFoundException`) are thrown inside the critical section.
+  This is safe: leaving a `synchronized` block by an exception always releases the monitor (no `try/finally` to forget,
+  unlike `ReentrantLock`), and the state is replaced only as the last statement, so a failed operation changes nothing.
+  Creating the exception under the lock costs a few microseconds, only on the error path; moving the throw outside
+  the lock would make the code harder to read for no measurable gain.
 - The critical section holds only what depends on the current state: the "team already playing" check and
   building the new state. Name normalization, stateless validation, id generation (`UUID.randomUUID()` uses
   `SecureRandom`) and creating the `Match` happen before the lock is taken.
@@ -166,6 +171,10 @@ and checked exceptions would clutter the API.
 
 The public records (`Match`, `MatchId`) enforce the same rules in their compact constructors (`null` → NPE,
 negative score → IAE), so an invalid instance cannot be built even outside the scoreboard.
+
+The non-negative score rule therefore exists twice — in `MatchValidator` and in `Match` — on purpose:
+the validator rejects an invalid update before the write lock is taken (D4), and the record guarantees that no invalid
+`Match` can exist at all. Removing either would trade one of these guarantees for less code.
 
 ### D7. Lifecycle — **Accepted**
 
